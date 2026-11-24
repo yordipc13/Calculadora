@@ -1,0 +1,33 @@
+Actúa como un arquitecto y desarrollador full-stack senior. Estoy desarrollando una aplicación web de servicio público en Costa Rica: una calculadora de préstamos y deudas.
+
+Ya tengo el frontend implementado en el repositorio actual. Ahora necesito que analices los archivos del frontend para entender los campos, nombres de variables y flujos existentes, y que diseñes e implementes todo el backend, la base de datos y la lógica funcional.
+
+### 1. Stack y arquitectura deseada
+- Stack a utilizar: [html, css y js puro. Supabase y Cloudflare Workers].
+- Mantén la arquitectura lo más simple, segura y mantenible posible, conectando directamente con las vistas y llamadas del frontend actual.
+
+### 2. Módulo 1: Job recurrente de tasas desde el BCCR
+- Necesito un único job programado (cron diario, por ejemplo a las 6:30 p. m. hora de Costa Rica) que consulte directamente la API REST oficial del Sistema de Divulgación de Datos Económicos (SDDE) del Banco Central de Costa Rica (`https://apim.bccr.fi.cr/SDDE/api/Bccr.GE.SDDE.Publico.Indicadores.API/indicadoresEconomicos/{codigo}/series`, autenticando con el token generado desde `https://sdd.bccr.fi.cr/es/IndicadoresEconomicos/Inicio/`).
+- En la imagen adjunta están las tasas e indicadores específicos que el sistema debe consultar, almacenar y exponer al frontend.
+- Requisitos del job y almacenamiento:
+  1. Guardar cada tasa con: código del indicador, nombre, moneda, valor numérico, `fecha_referencia_bccr` (fecha oficial del dato) y `ultima_verificacion` (timestamp de ejecución del job).
+  2. Idempotencia: no duplicar registros si el indicador no cambió respecto a la última fecha guardada en base de datos (recordando que algunos indicadores cambian a diario, otros semanalmente como TBP/TED, otros mensualmente y otros semestralmente como los topes de Ley de Usura).
+  3. Tolerancia a fallos: si el BCCR falla, responde lento o no trae datos nuevos ese día, conservar siempre el último valor válido y registrar el error en logs sin afectar al frontend.
+  4. Exponer un endpoint o consulta rápida para que el frontend muestre las tasas vigentes, su fecha oficial de actualización y las use por defecto en los cálculos (permitiendo edición manual por parte del usuario).
+
+### 3. Módulo 2: Lógica de cálculo de préstamos
+- Implementar la lógica completa de amortización (cuota nivelada / francesa), cálculo de intereses totales, soporte para tasas variables o mixtas (tasa base BCCR + margen), conversión de moneda usando el tipo de cambio del BCCR cuando aplique y simulación de abonos extraordinarios (reducción de plazo o reducción de cuota).
+
+### 4. Módulo 3: Deudas, resúmenes de tarjeta y privacidad desde el origen
+- Para el análisis de tarjetas de crédito, los usuarios subirán su resumen/estado de cuenta en un visor previo del frontend donde tachan/eliminan sus datos personales y de tarjeta antes de procesarlo.
+- Necesito la lógica de backend/procesamiento para:
+  1. Asegurar que ningún dato personal identificable (nombre, cédula, correo, número de tarjeta) ni el archivo original sin redactar se almacene en servidor o base de datos.
+  2. Extraer y estructurar únicamente los consumos, saldos, tasas e intereses del documento ya sanitizado.
+  3. Calcular estrategias de pago de deudas (método Avalancha vs. Bola de nieve) y alertar si alguna tasa supera los límites máximos permitidos vigentes (Ley de Usura del BCCR).
+
+### Qué necesito que hagas paso a paso:
+1. Revisa primero la estructura del frontend en este workspace para alinear contratos de datos, endpoints y nombres de campos.
+2. Propón el esquema de base de datos (tablas SQL) y las variables de entorno necesarias (como `BCCR_API_TOKEN`).
+3. Implementa el código del job del BCCR con un catálogo configurable de códigos de indicadores y manejo de errores.
+4. Implementa los endpoints/servicios de cálculo de préstamos, procesamiento de resúmenes sanitizados y estrategias de deuda, y conéctalos al frontend existente.
+5. Incluye instrucciones breves de despliegue, configuración del cron y cómo probar el job manualmente.
