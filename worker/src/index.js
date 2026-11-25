@@ -21,9 +21,17 @@ const corsHeaders = {
 
 async function supabaseRequest(env, path, options = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("Supabase no está configurado");
+  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const authHeaders = { apikey: supabaseKey, "Content-Type": "application/json" };
+  // New Supabase secret keys (sb_secret_...) are API keys, not JWTs.
+  // Legacy service_role keys are JWTs and still need the Bearer header
+  // so PostgREST receives the service_role claim.
+  if (!supabaseKey.startsWith("sb_secret_")) {
+    authHeaders.Authorization = `Bearer ${supabaseKey}`;
+  }
   const response = await fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
     ...options,
-    headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "Content-Type": "application/json", ...options.headers },
+    headers: { ...authHeaders, ...options.headers },
   });
   if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);
   return response;

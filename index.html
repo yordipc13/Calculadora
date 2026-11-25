@@ -22,101 +22,112 @@
 
     <main>
       <section class="view active" id="calculator-view">
-        <div class="hero">
+        <div class="hero calculator-hero">
           <div>
-            <p class="eyebrow">COSTA RICA / SIMULADOR 01</p>
-            <h1>Plan de amortización</h1>
-          </div>
-          <div class="simulation-options">
-            <label class="rate-selector">Moneda
-              <select id="currency">
-                <option value="CRC">Colones (₡)</option>
-                <option value="USD">Dólares (US$)</option>
-              </select>
-            </label>
-            <label class="rate-selector">Tipo de tasa
-              <select id="rate-type">
-                <option value="fixed">Tasa fija</option>
-                <option value="tbp">TBP + spread</option>
-                <option value="ted">TED + spread</option>
-                <option value="tpm">TPM + spread</option>
-              </select>
-            </label>
+            <p class="eyebrow">COSTA RICA / PRÉSTAMOS</p>
+            <h1>Calculadora de préstamo</h1>
           </div>
         </div>
 
-        <section class="fx-tool" aria-label="Conversor de monedas">
-          <div><p class="eyebrow">Tipo de cambio BCCR</p><h2>Conversión referencial</h2><p>Conversión informativa; no altera el saldo ni el contrato del préstamo.</p></div>
-          <label>Monto<input id="fx-amount" type="number" min="0" step="0.01" value="1000" /></label>
-          <label>Conversión<select id="fx-direction"><option value="USD_CRC">Dólares → colones (compra)</option><option value="CRC_USD">Colones → dólares (venta)</option></select></label>
-          <div class="fx-result"><small>Resultado estimado</small><strong id="fx-result">Tasas BCCR pendientes</strong><button class="secondary" id="use-fx-rate" type="button">Usar tipo de cambio</button></div>
+        <details class="fx-disclosure">
+          <summary><span>Conversor de moneda</span><span>Tipo de cambio BCCR</span></summary>
+          <section class="fx-tool" aria-label="Conversor de monedas">
+            <div><h2>Conversión referencial</h2><p>Informativa; no cambia el saldo del préstamo.</p></div>
+            <label>Monto<input id="fx-amount" type="number" min="0" step="0.01" value="1000" /></label>
+            <label>Conversión<select id="fx-direction"><option value="USD_CRC">Dólares → colones (compra)</option><option value="CRC_USD">Colones → dólares (venta)</option></select></label>
+            <div class="fx-result"><small>Resultado estimado</small><strong id="fx-result">Tasas BCCR pendientes</strong><button class="secondary" id="use-fx-rate" type="button">Usar tipo de cambio</button></div>
+          </section>
+        </details>
+
+        <section class="calculator-workspace" aria-label="Simulación del préstamo">
+        <section class="panel loan-inputs" aria-labelledby="loan-input-heading">
+          <div class="section-heading">
+            <span class="step-number">01</span>
+            <div><p class="eyebrow">Datos del préstamo</p><h2 id="loan-input-heading">Condiciones</h2></div>
+          </div>
+          <div class="loan-fields">
+            <div class="loan-selectors">
+              <label>Moneda
+                <select id="currency">
+                  <option value="CRC">Colones (₡)</option>
+                  <option value="USD">Dólares (US$)</option>
+                </select>
+              </label>
+              <label>Tipo de tasa
+                <select id="rate-type">
+                  <option value="fixed">Fija</option>
+                  <option value="tbp">TBP + spread</option>
+                  <option value="ted">TED + spread</option>
+                  <option value="tpm">TPM + spread</option>
+                </select>
+              </label>
+            </div>
+            <div class="loan-sliders">
+              <label>Monto del préstamo <output id="amount-output">₡3,000,000</output>
+                <input id="amount" type="range" min="100000" max="50000000" step="100000" value="3000000" />
+              </label>
+              <label>Tasa anual <output id="rate-output">16.0%</output>
+                <input id="rate" type="range" min="0" max="60" step="0.01" value="16" />
+              </label>
+              <label id="spread-label">Spread <output id="spread-output">0.0%</output>
+                <input id="spread" type="range" min="0" max="20" step="0.1" value="0" />
+              </label>
+              <label>Plazo <output id="term-output">36 meses</output>
+                <input id="term" type="range" min="1" max="360" step="1" value="36" />
+              </label>
+            </div>
+          </div>
+          <p id="rate-source-note" class="notice">La tasa anual es efectiva. Se mantiene constante salvo que agregues un ajuste.</p>
+
+          <details class="advanced-settings">
+            <summary>Ajustes adicionales</summary>
+            <div class="advanced-fields">
+              <label>Mes de cambio de tasa (0 = sin cambio)<input id="rate-change-month" type="number" min="0" max="360" step="1" value="0" /></label>
+              <label>Nueva tasa anual desde ese mes (%)<input id="rate-change-value" type="number" min="0" max="100" step="0.01" value="16" /></label>
+              <label>Abono adicional mensual<input id="extra-payment" type="number" min="0" step="1000" value="0" /></label>
+              <label>Aplicar abonos para
+                <select id="extra-mode"><option value="reduceTerm">Reducir plazo</option><option value="reducePayment">Reducir cuota</option></select>
+              </label>
+              <label>Iniciar abonos en el mes<input id="extra-start-month" type="number" min="1" max="360" value="1" /></label>
+            </div>
+            <div class="scenario-save-row">
+              <label>Fecha de corte<input id="cutoff-date" type="date" /></label>
+              <button class="primary" id="save-scenario" type="button">Guardar escenario</button>
+              <p class="status" id="scenario-status" role="status"></p>
+            </div>
+          </details>
         </section>
 
-        <section class="metric-grid" aria-label="Resumen de simulación">
-          <article class="metric"><span id="metric-principal">₡0</span><small>Principal</small></article>
-          <article class="metric"><span id="metric-term">0 meses</span><small>Plazo</small></article>
-          <article class="metric"><span id="metric-rate">0%</span><small>Tasa anual efectiva</small></article>
-          <article class="metric accent"><span id="metric-payment">₡0</span><small>Cuota mensual</small></article>
-          <article class="metric"><span id="metric-interest">₡0</span><small>Intereses totales</small></article>
-          <article class="metric"><span id="metric-total">₡0</span><small>Total pagado</small></article>
+        <section class="preview-panel" aria-label="Vista previa de resultados">
+        <section class="panel chart-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">02 / Evolución</p><h2>Saldo pendiente</h2></div>
+            <div class="legend"><span class="legend-balance"></span>Saldo</div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="balance-chart" role="img" aria-label="Gráfico de saldo pendiente"></canvas>
+          </div>
         </section>
-
-        <section class="dashboard-grid">
-          <article class="panel chart-panel">
-            <div class="panel-heading">
-              <div><p class="eyebrow">Evolución</p><h2>Saldo pendiente</h2></div>
-              <div class="legend"><span class="legend-balance"></span>Saldo</div>
-            </div>
-            <div class="chart-wrap">
-              <canvas id="balance-chart" role="img" aria-label="Gráfico de saldo pendiente"></canvas>
-            </div>
-          </article>
-
-          <article class="panel controls-panel">
-            <p class="eyebrow">Parámetros</p>
-            <h2>Ajusta el crédito</h2>
-            <label>Monto inicial <output id="amount-output">₡3,000,000</output>
-              <input id="amount" type="range" min="100000" max="50000000" step="100000" value="3000000" />
-            </label>
-            <label>Tasa anual <output id="rate-output">16.0%</output>
-              <input id="rate" type="range" min="0" max="60" step="0.01" value="16" />
-            </label>
-            <label id="spread-label">Spread adicional <output id="spread-output">0.0%</output>
-              <input id="spread" type="range" min="0" max="20" step="0.1" value="0" />
-            </label>
-            <label>Plazo <output id="term-output">36 meses</output>
-              <input id="term" type="range" min="1" max="360" step="1" value="36" />
-            </label>
-            <label>Mes de ajuste de tasa (0 = sin ajuste)
-              <input id="rate-change-month" type="number" min="0" max="360" step="1" value="0" />
-            </label>
-            <label>Nueva tasa anual desde ese mes (%)
-              <input id="rate-change-value" type="number" min="0" max="100" step="0.01" value="16" />
-            </label>
-            <p id="rate-source-note" class="notice">La tasa anual es efectiva. La proyección mantiene la tasa vigente constante, salvo que agregues un ajuste.</p>
-            <label>Abono adicional mensual
-              <input id="extra-payment" type="number" min="0" step="1000" value="0" />
-            </label>
-            <label>Uso del abono
-              <select id="extra-mode">
-                <option value="reduceTerm">Reducir plazo</option>
-                <option value="reducePayment">Reducir cuota</option>
-              </select>
-            </label>
-            <label>Mes inicial del abono
-              <input id="extra-start-month" type="number" min="1" max="360" value="1" />
-            </label>
-            <label>Fecha de corte
-              <input id="cutoff-date" type="date" />
-            </label>
-            <button class="primary" id="save-scenario" type="button">Guardar escenario local</button>
-            <p class="status" id="scenario-status" role="status"></p>
-          </article>
+        <section class="metric-section" aria-labelledby="results-heading">
+          <div class="section-heading">
+            <span class="step-number">03</span>
+            <div><p class="eyebrow">Estimación</p><h2 id="results-heading">Resultados</h2></div>
+          </div>
+          <section class="metric-grid" aria-label="Resumen de simulación">
+            <article class="metric"><span id="metric-principal">₡0</span><small>Monto del préstamo</small></article>
+            <article class="metric"><span id="metric-term">0 meses</span><small>Plazo</small></article>
+            <article class="metric"><span id="metric-rate">0%</span><small>Tasa anual efectiva</small></article>
+            <article class="metric accent"><span id="metric-payment">₡0</span><small>Cuota mensual estimada</small></article>
+            <article class="metric"><span id="metric-interest">₡0</span><small>Intereses estimados</small></article>
+            <article class="metric"><span id="metric-total">₡0</span><small>Total estimado</small></article>
+          </section>
+        </section>
+        </section>
         </section>
 
         <section class="panel schedule-panel">
           <div class="panel-heading">
-            <div><p class="eyebrow">Detalle</p><h2>Tabla de pagos</h2></div>
+            <div><p class="eyebrow">04 / Desglose</p><h2>Cuotas del préstamo</h2></div>
             <button class="secondary" id="export-csv" type="button">Exportar CSV</button>
           </div>
           <div class="table-wrap">
@@ -193,6 +204,7 @@
               <label>Pago mínimo<input id="financial-minimum" type="number" min="0" step="0.01" /></label>
               <label>Moneda<select id="financial-currency"><option value="CRC">Colones (₡)</option><option value="USD">Dólares (US$)</option></select></label>
             </div>
+            <p id="extraction-review" class="notice extraction-review" role="status" aria-live="polite">La extracción es preliminar. Revise los datos antes de guardar.</p>
             <div class="panel-heading transaction-heading"><h3>Consumos extraídos / editables</h3><button class="secondary" id="add-transaction" type="button">Agregar fila</button></div>
             <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Comercio</th><th>Monto</th><th>Moneda</th><th></th></tr></thead><tbody id="transactions-body"></tbody></table></div>
             <div class="consent-box">
@@ -228,9 +240,9 @@
       </section>
     </main>
 
-    <meta name="api-base" content="/api" />
+    <meta name="api-base" content="https://calculadora-finanzas.developpage.workers.dev/api" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
-  <script src="script.js"></script>
+  <script type="module" src="script.js"></script>
   </body>
 </html>

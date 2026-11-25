@@ -1,3 +1,7 @@
+import { calculateLoan } from "./worker/src/loan.js";
+import { extractFinancialData as parseDocumentFields, normalizeFinancialDate, parseFinancialNumber } from "./document-extraction.mjs";
+import { resolveScenarioRate } from "./scenario-history.mjs";
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const API_BASE = document.querySelector('meta[name="api-base"]')?.content.replace(/\/$/, "") || "/api";
@@ -5,6 +9,7 @@ const state = {
   schedule: [], rates: [], rateFilter: "ALL", source: null, pdf: null, image: null,
   page: 1, pageCount: 1, redactions: new Map(), pointerStart: null, flatDocument: null,
   transactions: [], debts: [], calculationSequence: 0, activeRateCode: null, applyingRate: false,
+  extractionIssues: [], extractionMissing: [], rejectedTransactions: 0,
 };
 
 function formatMoney(value, currency = $("#currency")?.value || "CRC", digits = 0) {
@@ -12,12 +17,7 @@ function formatMoney(value, currency = $("#currency")?.value || "CRC", digits = 
 }
 function escapeHtml(value) { const node = document.createElement("span"); node.textContent = String(value ?? ""); return node.innerHTML; }
 function parseAmount(value) {
-  if (typeof value === "number") return value;
-  const raw = String(value || "").replace(/[^\d.,-]/g, "");
-  if (!raw) return 0;
-  const comma = raw.lastIndexOf(","); const dot = raw.lastIndexOf(".");
-  const normalized = comma > dot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
-  return Number(normalized) || 0;
+  return parseFinancialNumber(value) ?? 0;
 }
 
 function calculateSchedule(principal, annualRate, months) {
@@ -136,18 +136,95 @@ function exportSchedule() {
 function saveScenario() {
   const principal = Number($("#amount").value); const annualRate = Number($("#rate").value); const months = Number($("#term").value); const cutoffDate = $("#cutoff-date").value;
   if (!(principal > 0) || annualRate < 0 || annualRate > 100 || months < 1 || !cutoffDate) { $("#scenario-status").textContent = "Revise monto, tasa, plazo y fecha de corte."; return; }
-  const scenario = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), cutoffDate, currency: $("#currency").value, principal, rateType: $("#rate-type").value, annualRate, spread: Number($("#spread").value), months, schedule: state.schedule, snapshot: { payment: state.schedule[0]?.payment || 0, totalInterest: state.schedule.reduce((sum, row) => sum + row.interest, 0), effectiveRate: annualRate + Number($("#rate-type").value === "fixed" ? 0 : $("#spread").value) } };
+  const rateType = $("#rate-type").value; const spread = rateType === "fixed" ? 0 : Number($("#spread").value);
+  const benchmarkCode = ({ tbp: "423", ted: "23698", tpm: "3541" })[rateType] || null;
+  const officialRate = benchmarkCode && rateByCode(benchmarkCode);
+  const rateSnapshot = {
+    benchmarkCode, benchmark: officialRate?.short_name || null, baseRate: annualRate, spread,
+    referenceValue: officialRate ? Number(officialRate.value) : null,
+    referenceDate: officialRate?.reference_date || null,
+    source: state.activeRateCode === benchmarkCode && officialRate && Number(officialRate.value) === annualRate ? "BCCR SDDE" : "Manual",
+  };
+  const assumptions = {
+    extraPayment: Number($("#extra-payment").value || 0), extraMode: $("#extra-mode").value,
+    extraStartMonth: Number($("#extra-start-month").value || 1),
+    rateChangeMonth: Number($("#rate-change-month").value || 0), rateChangeValue: Number($("#rate-change-value").value || annualRate),
+  };
+  const effectiveRate = annualRate + spread;
+  const baseline = calculateLoan({ principal, annualRate: effectiveRate, months, ...assumptions, rateChanges: assumptions.rateChangeMonth >= 2 ? [{ month: assumptions.rateChangeMonth, annualRate: assumptions.rateChangeValue }] : [] });
+  const scenario = {
+    id: crypto.randomUUID(), createdAt: new Date().toISOString(), cutoffDate, currency: $("#currency").value,
+    principal, rateType, annualRate, spread, months, assumptions, rateSnapshot,
+    schedule: baseline.schedule, recalculations: [],
+    snapshot: { payment: baseline.regularPayment, totalInterest: baseline.totalInterest, totalPaid: baseline.totalPaid, effectiveRate, rate: rateSnapshot },
+  };
   const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]"); scenarios.push(scenario); localStorage.setItem("financialScenarios", JSON.stringify(scenarios));
   $("#scenario-status").textContent = "Escenario guardado localmente."; loadScenarios();
 }
+function formatDifference(value, currency) {
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+  return `${sign}${formatMoney(Math.abs(value), currency, 2)}`;
+}
+function scenarioComparisonMarkup(scenario) {
+  const last = scenario.recalculations?.at(-1);
+  if (!last) return '<div class="scenario-comparison"><span>Sin recálculo histórico</span></div>';
+  const original = scenario.snapshot || {};
+  return `<div class="scenario-comparison"><strong>Recálculo al ${escapeHtml(last.cutoffDate)}</strong><span>${escapeHtml(last.rateDescription)}</span><span>Δ cuota ${formatDifference(last.result.regularPayment - Number(original.payment || 0), scenario.currency)} · Δ intereses ${formatDifference(last.result.totalInterest - Number(original.totalInterest || 0), scenario.currency)} · Δ total ${formatDifference(last.result.totalPaid - Number(original.totalPaid || 0), scenario.currency)}</span></div>`;
+}
 function loadScenarios() {
   const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]"); const container = $("#scenario-list"); if (!container) return;
-  container.innerHTML = scenarios.length ? scenarios.slice().reverse().map((s) => `<article class="scenario-item"><div><strong>${escapeHtml(s.currency)} · ${formatMoney(s.principal, s.currency)}</strong><span>${Number(s.snapshot?.effectiveRate || 0).toFixed(2)}% anual · ${s.months} meses</span></div><div><span>Corte: ${escapeHtml(s.cutoffDate)}</span><button class="secondary restore-scenario" data-id="${escapeHtml(s.id)}">Restaurar</button></div></article>`).join("") : '<p class="status">No hay escenarios guardados.</p>';
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Costa_Rica", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  container.innerHTML = scenarios.length ? scenarios.slice().reverse().map((s) => {
+    const savedRate = s.rateSnapshot?.source === "BCCR SDDE" && s.rateSnapshot.referenceDate
+      ? `${escapeHtml(s.rateSnapshot.benchmark || "BCCR")} ${Number(s.rateSnapshot.referenceValue).toFixed(2)}% del ${escapeHtml(s.rateSnapshot.referenceDate)}`
+      : `${s.rateType === "fixed" ? "Tasa fija" : "Base manual"} ${Number(s.annualRate || 0).toFixed(2)}%${s.spread ? ` + ${Number(s.spread).toFixed(2)}% spread` : ""}`;
+    return `<article class="scenario-item" data-scenario-id="${escapeHtml(s.id)}"><div class="scenario-summary"><strong>${escapeHtml(s.currency)} · ${formatMoney(s.principal, s.currency)}</strong><span>${Number(s.snapshot?.effectiveRate ?? (Number(s.annualRate || 0) + Number(s.spread || 0))).toFixed(2)}% anual · ${s.months} meses</span><span>${savedRate} · corte ${escapeHtml(s.cutoffDate || "sin fecha")}</span></div><div class="scenario-actions"><label>Fecha de recálculo<input type="date" data-scenario-date value="${escapeHtml(s.cutoffDate || "")}" max="${today}" /></label><button class="secondary recalculate-scenario" data-id="${escapeHtml(s.id)}" type="button">Recalcular</button><button class="secondary restore-scenario" data-id="${escapeHtml(s.id)}" type="button">Restaurar</button></div>${scenarioComparisonMarkup(s)}<p class="scenario-status" role="status"></p></article>`;
+  }).join("") : '<p class="status">No hay escenarios guardados.</p>';
   $$(".restore-scenario", container).forEach((button) => button.addEventListener("click", () => restoreScenario(button.dataset.id)));
+  $$(".recalculate-scenario", container).forEach((button) => button.addEventListener("click", () => recalculateScenario(button.dataset.id, button)));
+}
+function recalculateScenario(id, button) {
+  const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]");
+  const scenario = scenarios.find((item) => item.id === id);
+  const card = button.closest(".scenario-item");
+  const status = $(".scenario-status", card);
+  const cutoffDate = $("[data-scenario-date]", card).value;
+  try {
+    if (!scenario) throw new Error("No se encontró el escenario guardado.");
+    const rate = resolveScenarioRate(scenario, state.rates, cutoffDate);
+    const assumptions = scenario.assumptions || {};
+    const rateChangeMonth = Number(assumptions.rateChangeMonth || 0);
+    const result = calculateLoan({
+      principal: Number(scenario.principal), annualRate: rate.annualRate, months: Number(scenario.months),
+      extraPayment: Number(assumptions.extraPayment || 0), extraMode: assumptions.extraMode || "reduceTerm",
+      extraStartMonth: Number(assumptions.extraStartMonth || 1),
+      rateChanges: rateChangeMonth >= 2 ? [{ month: rateChangeMonth, annualRate: Number(assumptions.rateChangeValue) }] : [],
+    });
+    const rateDescription = rate.benchmark
+      ? `${rate.benchmark} ${rate.baseRate.toFixed(2)}% + ${rate.spread.toFixed(2)}% spread = ${rate.annualRate.toFixed(2)}% anual · dato BCCR ${rate.referenceDate}`
+      : `Tasa fija guardada ${rate.annualRate.toFixed(2)}% anual`;
+    scenario.recalculations = [...(scenario.recalculations || []), {
+      cutoffDate, createdAt: new Date().toISOString(), rate: { ...rate }, rateDescription,
+      result: { regularPayment: result.regularPayment, totalInterest: result.totalInterest, totalPaid: result.totalPaid, monthsPaid: result.monthsPaid },
+    }].slice(-20);
+    localStorage.setItem("financialScenarios", JSON.stringify(scenarios));
+    loadScenarios();
+  } catch (error) {
+    status.textContent = error.message;
+  }
 }
 function restoreScenario(id) {
   const s = JSON.parse(localStorage.getItem("financialScenarios") || "[]").find((item) => item.id === id); if (!s) return;
-  $("#currency").value = s.currency; $("#amount").value = String(s.principal); $("#rate-type").value = s.rateType; $("#rate").value = String(s.annualRate); $("#spread").value = String(s.spread); $("#term").value = String(s.months); $("#cutoff-date").value = s.cutoffDate; updateCalculator(); $("#scenario-status").textContent = "Escenario restaurado.";
+  const code = ({ tbp: "423", ted: "23698", tpm: "3541" })[s.rateType];
+  $("#currency").value = s.currency; $("#amount").value = String(s.principal); $("#rate-type").value = s.rateType || "fixed";
+  $("#rate").value = String(s.annualRate); $("#spread").value = String(s.spread || 0); $("#term").value = String(s.months);
+  $("#extra-payment").value = String(s.assumptions?.extraPayment || 0); $("#extra-mode").value = s.assumptions?.extraMode || "reduceTerm";
+  $("#extra-start-month").value = String(s.assumptions?.extraStartMonth || 1);
+  $("#rate-change-month").value = String(s.assumptions?.rateChangeMonth || 0); $("#rate-change-value").value = String(s.assumptions?.rateChangeValue ?? s.annualRate);
+  $("#cutoff-date").value = s.cutoffDate || "";
+  const currentRate = code && rateByCode(code);
+  state.activeRateCode = s.rateSnapshot?.source === "BCCR SDDE" ? code : currentRate && Number(currentRate.value) === Number(s.annualRate) ? code : null;
+  updateCalculator(); $("#scenario-status").textContent = "Escenario restaurado.";
 }
 
 const rateByCode = (code) => state.rates.find((rate) => String(rate.code) === String(code));
@@ -291,23 +368,38 @@ async function flattenAndExtract() {
   } catch (error) { $("#privacy-status").textContent = `No se pudo completar el OCR local: ${error.message}`; }
   button.textContent = "Confirmar censura y extraer datos"; button.disabled = !state.source;
 }
-function normalizeDate(value) {
-  const dmy = value.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/); if (!dmy) return "";
-  let year = Number(dmy[3]); if (year < 100) year += 2000;
-  return `${String(year).padStart(4, "0")}-${String(dmy[2]).padStart(2, "0")}-${String(dmy[1]).padStart(2, "0")}`;
+function normalizeDate(value) { return normalizeFinancialDate(value); }
+function validFinancialField(id) {
+  const value = $(`#${id}`).value.trim();
+  if (!value) return false;
+  if (id === "financial-date") return normalizeFinancialDate(value) === value;
+  if (id === "financial-rate") { const rate = Number(value); return Number.isFinite(rate) && rate >= 0 && rate <= 100; }
+  const amount = parseFinancialNumber(value);
+  return Number.isFinite(amount) && amount > 0;
+}
+function updateExtractionReview() {
+  const inputIds = { date: "financial-date", amount: "financial-amount", payment: "financial-payment", balance: "financial-balance", annualRate: "financial-rate", minimumPayment: "financial-minimum" };
+  state.extractionIssues = state.extractionIssues.filter((issue) => !validFinancialField(inputIds[issue.id]));
+  const messages = state.extractionIssues.map((issue) => issue.message);
+  if (state.extractionMissing.length) messages.push(`No se detectó: ${state.extractionMissing.join(", ")}.`);
+  if (state.rejectedTransactions) messages.push(`${state.rejectedTransactions} fila(s) de consumo se descartaron por fecha o monto incompleto/inválido.`);
+  if (!messages.length) messages.push("Revise los campos detectados y confirme antes de guardar.");
+  const review = $("#extraction-review");
+  review.textContent = messages.join(" ");
+  review.classList.toggle("warning", state.extractionIssues.length > 0 || state.rejectedTransactions > 0);
+  $("#save-anonymized").disabled = !$("#consent").checked || state.extractionIssues.length > 0;
+  return state.extractionIssues.length === 0;
 }
 function extractFinancialData(text) {
-  const rate = text.match(/(?:tasa|inter[eé]s)[^\d%]{0,35}(\d{1,2}(?:[.,]\d{1,4})?)\s*%/i); if (rate) $("#financial-rate").value = rate[1].replace(",", ".");
-  const balance = text.match(/(?:saldo\s*(?:total|al corte|actual)?|balance)[^\d]{0,25}(?:₡|CRC|US\$|USD)?\s*([\d.,]+)/i); if (balance) $("#financial-balance").value = parseAmount(balance[1]);
-  const minimum = text.match(/(?:pago\s*m[ií]nimo|minimum\s*payment)[^\d]{0,25}(?:₡|CRC|US\$|USD)?\s*([\d.,]+)/i); if (minimum) $("#financial-minimum").value = parseAmount(minimum[1]);
-  const due = text.match(/(?:fecha\s*(?:de\s*)?(?:corte|estado)|statement\s*date)[^\d]{0,20}(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i); if (due) $("#financial-date").value = normalizeDate(due[1]);
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); const transactions = [];
-  for (const line of lines) {
-    const match = line.match(/(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+(.+?)\s+(?:₡|CRC|US\$|USD)?\s*(-?[\d][\d.,]*)\s*$/i);
-    if (!match || /saldo|pago m[ií]nimo|total|tasa/i.test(line)) continue;
-    const date = normalizeDate(match[1]); const amount = parseAmount(match[3]); if (date && amount > 0 && match[2].trim().length > 1) transactions.push({ date, concept: match[2].trim(), amount, currency: /US\$|USD/i.test(line) ? "USD" : $("#financial-currency").value });
-  }
-  state.transactions = transactions; renderTransactions(); renderDebts();
+  const extracted = parseDocumentFields(text, $("#financial-currency").value);
+  const inputIds = { date: "financial-date", amount: "financial-amount", payment: "financial-payment", balance: "financial-balance", annualRate: "financial-rate", minimumPayment: "financial-minimum" };
+  Object.entries(inputIds).forEach(([field, id]) => { $(`#${id}`).value = extracted.fields[field].value ?? ""; });
+  state.extractionIssues = extracted.issues;
+  state.extractionMissing = extracted.missing;
+  state.rejectedTransactions = extracted.rejectedTransactions;
+  state.transactions = extracted.transactions;
+  if (state.transactions.length && state.transactions.every((row) => row.currency === state.transactions[0].currency)) $("#financial-currency").value = state.transactions[0].currency;
+  renderTransactions(); renderDebts(); updateExtractionReview();
 }
 function renderTransactions() {
   $("#transactions-body").innerHTML = state.transactions.map((row, index) => `<tr><td><input type="date" data-tx="${index}" data-field="date" value="${escapeHtml(row.date)}"></td><td><input type="text" maxlength="120" data-tx="${index}" data-field="concept" value="${escapeHtml(row.concept)}"></td><td><input type="number" min="0" step="0.01" data-tx="${index}" data-field="amount" value="${Number(row.amount) || 0}"></td><td><select data-tx="${index}" data-field="currency"><option value="CRC" ${row.currency === "CRC" ? "selected" : ""}>CRC</option><option value="USD" ${row.currency === "USD" ? "selected" : ""}>USD</option></select></td><td><button type="button" class="danger remove-transaction" data-index="${index}" aria-label="Eliminar consumo">×</button></td></tr>`).join("");
@@ -333,9 +425,34 @@ function importTransactions() {
 }
 function saveAnonymizedSummary() {
   if (!$("#consent").checked) return;
-  const summary = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), date: $("#financial-date").value, concept: $("#financial-concept").value.trim(), amount: parseAmount($("#financial-amount").value), payment: parseAmount($("#financial-payment").value), minimumPayment: parseAmount($("#financial-minimum").value), balance: parseAmount($("#financial-balance").value), annualRate: Number($("#financial-rate").value || 0), currency: $("#financial-currency").value, transactions: state.transactions.map((row) => ({ ...row })) };
-  const saved = JSON.parse(localStorage.getItem("anonymizedDebtSummaries") || "[]"); saved.push(summary); localStorage.setItem("anonymizedDebtSummaries", JSON.stringify(saved));
-  $("#privacy-status").textContent = "Resumen financiero guardado en este dispositivo. No se envió al servidor.";
+  if (!updateExtractionReview()) { $("#privacy-status").textContent = "Resuelva manualmente los campos ambiguos antes de guardar."; return; }
+  try {
+    const rawDate = $("#financial-date").value;
+    const date = rawDate ? normalizeFinancialDate(rawDate) : null;
+    if (rawDate && !date) throw new Error("La fecha no es válida.");
+    const optionalAmount = (id) => {
+      const value = $(`#${id}`).value.trim();
+      if (!value) return null;
+      const parsed = parseFinancialNumber(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`Revise el campo ${id.replace("financial-", "").replace("-", " ")}.`);
+      return parsed;
+    };
+    const rawRate = $("#financial-rate").value.trim();
+    const annualRate = rawRate ? Number(rawRate) : null;
+    if (annualRate !== null && (!Number.isFinite(annualRate) || annualRate < 0 || annualRate > 100)) throw new Error("La tasa debe estar entre 0% y 100%.");
+    const transactions = state.transactions.map((row) => {
+      const amount = Number(row.amount);
+      const transactionDate = normalizeFinancialDate(row.date);
+      if (!transactionDate || !row.concept.trim() || !Number.isFinite(amount) || amount <= 0) throw new Error("Complete fecha, comercio y monto válido en cada consumo.");
+      return { ...row, date: transactionDate, amount };
+    });
+    const amount = optionalAmount("financial-amount"); const payment = optionalAmount("financial-payment");
+    const balance = optionalAmount("financial-balance"); const minimumPayment = optionalAmount("financial-minimum");
+    if (![amount, payment, balance, minimumPayment].some((value) => value !== null) && !transactions.length) throw new Error("No hay montos financieros válidos para guardar.");
+    const summary = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), date, concept: $("#financial-concept").value.trim(), amount, payment, minimumPayment, balance, annualRate, currency: $("#financial-currency").value, transactions };
+    const saved = JSON.parse(localStorage.getItem("anonymizedDebtSummaries") || "[]"); saved.push(summary); localStorage.setItem("anonymizedDebtSummaries", JSON.stringify(saved));
+    $("#privacy-status").textContent = "Resumen financiero guardado en este dispositivo. No se envió al servidor.";
+  } catch (error) { $("#privacy-status").textContent = error.message; }
 }
 async function compareDebtStrategies() {
   const budget = Number($("#debt-budget").value); const currency = $("#financial-currency").value;
@@ -352,8 +469,10 @@ async function compareDebtStrategies() {
 }
 function clearDocument(options = {}) {
   state.source?.close?.(); state.pdf?.destroy?.(); state.source = null; state.pdf = null; state.image?.close?.(); state.image = null; state.redactions = new Map(); state.flatDocument = null; state.sourceText = ""; state.transactions = [];
+  state.extractionIssues = []; state.extractionMissing = []; state.rejectedTransactions = 0;
   $("#document-file").value = ""; $("#document-text").value = ""; $("#document-preview").textContent = "Sin contenido cargado. El original no se conserva."; $("#redaction-canvas").getContext("2d").clearRect(0, 0, $("#redaction-canvas").width, $("#redaction-canvas").height); $("#page-indicator").textContent = "Sin documento"; $("#prev-page").disabled = true; $("#next-page").disabled = true; $("#flatten-ocr").disabled = true; $("#undo-redaction").disabled = true; $("#consent").checked = false; $("#save-anonymized").disabled = true; renderTransactions();
   ["financial-date", "financial-concept", "financial-amount", "financial-payment", "financial-balance", "financial-rate", "financial-minimum"].forEach((id) => { $(`#${id}`).value = ""; });
+  updateExtractionReview();
   if (!options.keepStatus) $("#privacy-status").textContent = "Archivo y campos temporales descartados.";
 }
 
@@ -371,7 +490,8 @@ function bindEvents() {
   $("#redaction-canvas").addEventListener("pointerdown", beginRedaction); $("#redaction-canvas").addEventListener("pointerup", finishRedaction);
   $("#undo-redaction").addEventListener("click", undoRedaction); $("#flatten-ocr").addEventListener("click", flattenAndExtract); $("#prev-page").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; renderDocumentPage(); } }); $("#next-page").addEventListener("click", () => { if (state.page < state.pageCount) { state.page += 1; renderDocumentPage(); } });
   $("#scan-document").addEventListener("click", () => { extractFinancialData($("#document-text").value); $("#privacy-status").textContent = "Texto analizado localmente. Revise el resumen y las filas extraídas."; });
-  $("#clear-document").addEventListener("click", () => clearDocument()); $("#save-anonymized").addEventListener("click", saveAnonymizedSummary); $("#consent").addEventListener("change", (event) => { $("#save-anonymized").disabled = !event.target.checked; });
+  $("#clear-document").addEventListener("click", () => clearDocument()); $("#save-anonymized").addEventListener("click", saveAnonymizedSummary); $("#consent").addEventListener("change", updateExtractionReview);
+  ["#financial-date", "#financial-amount", "#financial-payment", "#financial-balance", "#financial-rate", "#financial-minimum"].forEach((selector) => $(selector).addEventListener("input", updateExtractionReview));
   $("#add-transaction").addEventListener("click", addTransaction); $("#import-transactions").addEventListener("click", importTransactions); $("#add-debt").addEventListener("click", addCurrentDebt); $("#add-empty-debt").addEventListener("click", addEmptyDebt); $("#compare-debt-strategies").addEventListener("click", compareDebtStrategies);
   window.addEventListener("resize", () => requestAnimationFrame(drawChart));
 }

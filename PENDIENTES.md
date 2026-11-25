@@ -16,16 +16,17 @@
 
 ## Historial y recálculo
 
-- Persistir snapshots de tasas asociadas a cada simulación.
-- Permitir recalcular con tasa fija, TBP + spread, TED + spread y TPM + spread.
-- Guardar la fecha de corte usada por cada cálculo.
-- Presentar diferencias entre la simulación original y el recálculo.
+- [x] Guardar en cada escenario local los parámetros, la tasa base, spread, referencia BCCR, fecha de vigencia y resultados originales.
+- [x] Recalcular tasas fijas y variables (TBP/TED/TPM + spread) con el último dato disponible en o antes de la fecha elegida.
+- [x] Guardar la fecha de corte del escenario y la fecha elegida para cada recálculo.
+- [x] Mostrar diferencias de cuota, intereses y total pagado frente al escenario original.
+- [ ] Ampliar la retención del historial BCCR más allá de las últimas 30 observaciones y decidir si los escenarios deben persistirse fuera de este navegador.
 
 ## Visor previo y privacidad
 
-- Implementar OCR local para PDF e imágenes.
-- Evaluar procesamiento de PDF con un visor privado compatible, por ejemplo PDF.js o una biblioteca similar.
-- Permitir censura manual visual por bloques sobre PDF e imágenes.
+- [x] Implementar OCR local para PDF e imágenes.
+- [x] Procesar PDF con PDF.js en el navegador.
+- [x] Permitir censura manual visual por bloques sobre PDF e imágenes.
 - Agregar detección asistida editable de cédula, DIMEX, correo, teléfono, dirección, tarjeta y nombres.
 - Separar los datos confirmados del documento original.
 - Implementar confirmación de borrado y una política de retención explícita.
@@ -35,16 +36,10 @@
 
 ## Extracción financiera
 
-- Extraer y validar:
-  - fecha
-  - comercio o concepto
-  - monto
-  - cuota
-  - saldo al corte
-  - pago mínimo
-  - tasa
-- Marcar campos dudosos para revisión humana.
-- Rechazar automáticamente datos incompletos o ambiguos.
+- [x] Extraer y validar fecha, monto, cuota, saldo al corte, pago mínimo y tasa; comercio/concepto permanece editable y manual.
+- [x] Marcar como dudosos los valores repetidos, ilegibles o fuera de rango y exigir corrección manual antes de guardar.
+- [x] Descartar filas de consumo sin fecha o monto válido y evitar guardar resúmenes sin ningún monto financiero válido.
+- [ ] Definir campos obligatorios por tipo de documento; los campos no detectados se informan, pero pueden permanecer vacíos en un resumen parcial.
 - Evitar almacenar nombres, números de cuenta, cédulas o información de tarjetas.
 
 ## Seguridad y producción
@@ -75,7 +70,8 @@ Avances implementados en esta iteración:
 - Validación de monto, tasa y plazo antes de guardar.
 - Límite de vivienda a 20 años en USD y 30 años en CRC.
 - Campos financieros editables en el visor privado.
-- Extracción automática preliminar de fecha, montos y tasa.
+- Extracción validada de fecha, montos, cuota, saldo, pago mínimo y tasa; advertencias de campos no detectados o ambiguos.
+- Snapshot de tasa BCCR y recálculo histórico local con comparación de cuota, intereses y total.
 - Limpieza de campos privados al descartar el documento.
 
 
@@ -93,7 +89,6 @@ Implementado en esta versión:
 
 Pendiente de integración real:
 
-- API de datos del BCCR/SDDE.
-- OCR real de PDF e imágenes.
-- Censura visual interactiva sobre el documento.
-- Backend, autenticación y almacenamiento persistente seguro.
+- Confirmar credenciales/límites y validar despliegue de la API BCCR/SDDE en producción.
+- Pruebas automatizadas de integración BCCR y regresión de privacidad financiera.
+- Definir si se requiere autenticación y almacenamiento persistente seguro para un servicio multipersonal.
