@@ -39,6 +39,77 @@ export function normalizeFinancialDate(input) {
   return `${String(parts[0]).padStart(4, "0")}-${String(parts[1]).padStart(2, "0")}-${String(parts[2]).padStart(2, "0")}`;
 }
 
+const personalDataPatterns = [
+  { label: "correo", pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i },
+  { label: "teléfono", pattern: /(?<!\d)(?:\+?506[\s-]?)?[2-8]\d{3}[\s-]?\d{4}(?!\d)/ },
+  { label: "identificación", pattern: /\b(?:c[eé]dula|identificaci[oó]n|documento\s+de\s+identidad)\s*(?:n[°º.]?\s*)?[:#-]?\s*[\d-]{8,12}\b/i },
+  { label: "tarjeta", pattern: /(?<!\d)(?:\d[ -]?){13,19}(?!\d)/ },
+  { label: "dirección", pattern: /\b(?:direcci[oó]n|domicilio|address)\s*[:#-]\s*\S.+/i },
+  { label: "nombre o titular", pattern: /\b(?:nombre|titular|cliente|cardholder)\s*[:#-]\s*[\p{L}][\p{L}.'-]*(?:\s+[\p{L}][\p{L}.'-]*){0,3}/iu },
+];
+
+export function detectPersonalData(value) {
+  const text = String(value ?? "");
+  const phoneSearchText = personalDataPatterns
+    .filter(({ label }) => ["identificación", "tarjeta"].includes(label))
+    .reduce((safeText, { pattern }) => safeText.replace(pattern, (match) => " ".repeat(match.length)), text);
+  return personalDataPatterns
+    .filter(({ label, pattern }) => pattern.test(label === "teléfono" ? phoneSearchText : text))
+    .map(({ label }) => label);
+}
+
+export function getSummaryCoverage({ type, date, amount, payment, balance, annualRate, minimumPayment, transactions = [] }) {
+  const present = {
+    date: Boolean(normalizeFinancialDate(date)),
+    amount: Number.isFinite(Number(amount)) && Number(amount) > 0,
+    payment: Number.isFinite(Number(payment)) && Number(payment) > 0,
+    balance: Number.isFinite(Number(balance)) && Number(balance) > 0,
+    annualRate: annualRate !== null && annualRate !== undefined && String(annualRate).trim() !== "" && Number.isFinite(Number(annualRate)) && Number(annualRate) >= 0,
+    minimumPayment: Number.isFinite(Number(minimumPayment)) && Number(minimumPayment) > 0,
+    transactions: Array.isArray(transactions) && transactions.length > 0,
+  };
+  const requiredGroups = {
+    creditCard: [
+      { label: "fecha de corte", fields: ["date"] },
+      { label: "saldo, pago, pago mínimo o consumos", fields: ["balance", "payment", "minimumPayment", "transactions"] },
+    ],
+    loan: [
+      { label: "fecha del estado", fields: ["date"] },
+      { label: "monto original o saldo", fields: ["amount", "balance"] },
+      { label: "tasa anual", fields: ["annualRate"] },
+    ],
+    other: [
+      { label: "al menos un monto o consumo", fields: ["amount", "payment", "balance", "minimumPayment", "transactions"] },
+    ],
+  };
+  const missingRequiredFields = (requiredGroups[type] || requiredGroups.other)
+    .filter(({ fields }) => !fields.some((field) => present[field]))
+    .map(({ label }) => label);
+  const hasFinancialData = ["amount", "payment", "balance", "minimumPayment", "transactions"].some((field) => present[field]);
+  return { complete: missingRequiredFields.length === 0, hasFinancialData, missingRequiredFields };
+}
+
+export function projectAnonymizedSummary(summary) {
+  return {
+    id: summary.id,
+    createdAt: summary.createdAt,
+    consentAt: summary.consentAt,
+    consentVersion: summary.consentVersion,
+    documentType: summary.documentType,
+    date: summary.date,
+    concept: summary.concept,
+    amount: summary.amount,
+    payment: summary.payment,
+    minimumPayment: summary.minimumPayment,
+    balance: summary.balance,
+    annualRate: summary.annualRate,
+    currency: summary.currency,
+    coverage: summary.coverage,
+    missingRequiredFields: [...summary.missingRequiredFields],
+    transactions: summary.transactions.map(({ date, concept, amount, currency }) => ({ date, concept, amount, currency })),
+  };
+}
+
 const definitions = [
   { id: "date", label: "fecha de corte", labelPattern: /\bfecha\s+(?:de\s+)?(?:corte|estado)\b|\bstatement\s+date\b/i, valuePattern: /\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/, parse: normalizeFinancialDate, validate: Boolean },
   { id: "amount", label: "monto", labelPattern: /\b(?:monto(?:\s+(?:original|inicial|total|del\s+cr[eé]dito))?|principal|importe(?:\s+total)?)\b/i, valuePattern: /[-+]?\s*(?:(?:US\$|USD|CRC|[$₡])\s*)?\d[\d.,]*/i, parse: parseFinancialNumber, validate: (value) => Number.isFinite(value) && value > 0 },

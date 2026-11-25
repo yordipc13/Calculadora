@@ -6,6 +6,12 @@ compatibility_date = "2026-11-24"
 BCCR_API_BASE_URL = "https://apim.bccr.fi.cr/SDDE/api/Bccr.GE.SDDE.Publico.Indicadores.API"
 BCCR_TIMEOUT_MS = "15000"
 
+[[unsafe.bindings]]
+name = "CALCULATOR_LIMITER"
+type = "ratelimit"
+namespace_id = "20261125"
+simple = { limit = 120, period = 60 }
+
 [triggers]
 # Cloudflare cron expressions use UTC; Costa Rica is UTC-6 year-round.
 crons = ["30 0 * * *"]

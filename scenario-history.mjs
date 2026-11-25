@@ -10,6 +10,13 @@ export function resolveScenarioRate(scenario, rates, cutoffDate) {
     return { annualRate, baseRate: annualRate, spread: 0, benchmark: null, referenceDate: null, source: "Tasa fija guardada" };
   }
 
+  if (scenario.rateSnapshot?.source === "Manual") {
+    const baseRate = Number(scenario.rateSnapshot.baseRate ?? scenario.annualRate);
+    const annualRate = baseRate + spread;
+    if (!Number.isFinite(spread) || spread < 0 || !Number.isFinite(baseRate) || baseRate < 0 || baseRate > 100 || annualRate > 100) throw new Error("La tasa efectiva calculada está fuera de rango.");
+    return { annualRate, baseRate, spread, benchmark: null, referenceDate: null, source: "Manual" };
+  }
+
   const code = scenario.rateSnapshot?.benchmarkCode || BENCHMARK_CODES[rateType];
   if (!code) throw new Error("No se reconoce la tasa de referencia de este escenario.");
   const rate = (rates || []).find((item) => String(item.code) === String(code));

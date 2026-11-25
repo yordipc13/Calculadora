@@ -8,30 +8,63 @@ const INDICATORS = [
   { code: "318", name: "Tipo de cambio de venta del dólar", shortName: "Venta", currency: "CRC", unit: "CRC", description: "Referencia para convertir colones a dólares al tipo de venta.", max: 100000 },
   { code: "3541", name: "Tasa de Política Monetaria", shortName: "TPM", currency: "CRC", unit: "percent", description: "Tasa de referencia de política monetaria del BCCR.", max: 100 },
 ];
+const RATE_HISTORY_LIMIT = 365;
 
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
-}
-
+const MAX_JSON_BODY_BYTES = 16 * 1024;
+const DEFAULT_DEV_ORIGINS = ["http://localhost:5500", "http://127.0.0.1:5500"];
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Vary": "Origin",
 };
+
+function corsFor(request, env) {
+  const origin = request.headers.get("Origin");
+  const configured = env.CORS_ALLOWED_ORIGINS
+    ? env.CORS_ALLOWED_ORIGINS.split(",").map((value) => value.trim()).filter(Boolean)
+    : DEFAULT_DEV_ORIGINS;
+  const allowed = !origin || configured.includes(origin);
+  return {
+    allowed,
+    headers: { ...corsHeaders, ...(origin && allowed ? { "Access-Control-Allow-Origin": origin } : {}) },
+  };
+}
+
+function json(body, status = 200, headers = corsHeaders) {
+  return new Response(JSON.stringify(body), { status, headers: { ...headers, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+}
+
+function requestError(message, status) {
+  return Object.assign(new Error(message), { status });
+}
+
+async function readJsonBody(request) {
+  if (!request.headers.get("Content-Type")?.toLowerCase().includes("application/json")) {
+    throw requestError("El contenido debe ser JSON.", 415);
+  }
+  const contentLength = Number(request.headers.get("Content-Length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) throw requestError("La solicitud supera el tamaño permitido.", 413);
+  const bytes = await request.arrayBuffer();
+  if (bytes.byteLength > MAX_JSON_BODY_BYTES) throw requestError("La solicitud supera el tamaño permitido.", 413);
+  let body;
+  try { body = JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { throw requestError("El cuerpo JSON no es válido.", 400); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw requestError("El cuerpo JSON debe ser un objeto.", 400);
+  return body;
+}
+
+async function isCalculationRateLimited(request, env, endpoint) {
+  if (!env.CALCULATOR_LIMITER) return false;
+  const address = request.headers.get("CF-Connecting-IP") || "unknown";
+  const result = await env.CALCULATOR_LIMITER.limit({ key: `${endpoint}:${address}` });
+  return !result.success;
+}
 
 async function supabaseRequest(env, path, options = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("Supabase no está configurado");
-  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  const authHeaders = { apikey: supabaseKey, "Content-Type": "application/json" };
-  // New Supabase secret keys (sb_secret_...) are API keys, not JWTs.
-  // Legacy service_role keys are JWTs and still need the Bearer header
-  // so PostgREST receives the service_role claim.
-  if (!supabaseKey.startsWith("sb_secret_")) {
-    authHeaders.Authorization = `Bearer ${supabaseKey}`;
-  }
   const response = await fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
     ...options,
-    headers: { ...authHeaders, ...options.headers },
+    headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`, "Content-Type": "application/json", ...options.headers },
   });
   if (!response.ok) throw new Error(`Supabase ${response.status}: ${await response.text()}`);
   return response;
@@ -90,7 +123,12 @@ async function recordVerification(env, indicator, status, error = null) {
 async function refreshRates(env) {
   if (!env.BCCR_API_TOKEN) throw new Error("Falta el secreto BCCR_API_TOKEN");
   const result = { indicators: [], errors: [], checkedAt: new Date().toISOString() };
+  const logRetentionCutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+  await supabaseRequest(env, `bccr_job_logs?executed_at=lt.${encodeURIComponent(logRetentionCutoff)}`, {
+    method: "DELETE", headers: { Prefer: "return=minimal" },
+  }).catch((error) => console.error("No se pudieron purgar logs BCCR antiguos", error.message));
   for (const indicator of INDICATORS) {
+    const startedAt = Date.now();
     try {
       const current = await fetchIndicator(env, indicator);
       const previousResponse = await supabaseRequest(env, `bccr_rates?code=eq.${indicator.code}&select=id,value,reference_date&order=reference_date.desc&limit=1`);
@@ -108,32 +146,36 @@ async function refreshRates(env) {
       }
       await recordVerification(env, current, "ok");
       result.indicators.push({ code: current.code, value: current.value, referenceDate: current.referenceDate, changed: !previous || Number(previous.value) !== current.value });
+      await supabaseRequest(env, "bccr_job_logs", {
+        method: "POST", body: JSON.stringify({ code: current.code, status: "ok", executed_at: new Date().toISOString(), duration_ms: Date.now() - startedAt }),
+      }).catch((error) => console.error("No se pudo registrar ejecución BCCR", error.message));
     } catch (error) {
       const message = error.name === "AbortError" ? "Tiempo de espera agotado" : error.message;
       result.errors.push({ code: indicator.code, error: message });
       await recordVerification(env, indicator, "error", message).catch((logError) => console.error("No se pudo registrar estado BCCR", logError.message));
-      await supabaseRequest(env, "bccr_job_logs", { method: "POST", body: JSON.stringify({ code: indicator.code, status: "error", error: message, executed_at: new Date().toISOString() }) }).catch(() => {});
+      await supabaseRequest(env, "bccr_job_logs", {
+        method: "POST", body: JSON.stringify({ code: indicator.code, status: "error", error: message, executed_at: new Date().toISOString(), duration_ms: Date.now() - startedAt }),
+      }).catch((logError) => console.error("No se pudo registrar error BCCR", logError.message));
     }
   }
   return result;
 }
 
 async function getRates(env) {
-  const [rateResponse, statusResponse] = await Promise.all([
-    supabaseRequest(env, "bccr_rates?select=*&order=reference_date.desc"),
+  const [historyResponses, statusResponse] = await Promise.all([
+    Promise.all(INDICATORS.map((indicator) => supabaseRequest(env, `bccr_rates?code=eq.${indicator.code}&select=*&order=reference_date.desc&limit=${RATE_HISTORY_LIMIT}`))),
     supabaseRequest(env, "bccr_rate_status?select=code,last_verification,last_success,status,last_error,indicator_name"),
   ]);
-  const history = await rateResponse.json();
+  const histories = await Promise.all(historyResponses.map((response) => response.json()));
   const status = await statusResponse.json();
-  const latestByCode = new Map();
-  for (const row of history) if (!latestByCode.has(row.code)) latestByCode.set(row.code, row);
-  const rates = INDICATORS.map((indicator) => {
-    const row = latestByCode.get(indicator.code);
+  const rates = INDICATORS.map((indicator, index) => {
+    const history = histories[index];
+    const row = history[0];
     const check = status.find((entry) => entry.code === indicator.code);
     const previous = history.find((entry) => entry.code === indicator.code && row && Number(entry.value) !== Number(row.value));
     return row ? { ...row, name: indicator.name, short_name: indicator.shortName, unit: indicator.unit, description: indicator.description,
       last_verification: check?.last_verification || null, last_success: check?.last_success || null, service_status: check?.status || "unknown", last_error: check?.last_error || null,
-      previous_value: previous?.value ?? null, history: history.filter((entry) => entry.code === indicator.code).slice(0, 30).reverse() } : null;
+      previous_value: previous?.value ?? null, history: history.slice(0, RATE_HISTORY_LIMIT).reverse() } : null;
   }).filter(Boolean);
   return { rates, source: "BCCR SDDE", checkedAt: status.map((item) => item.last_verification).sort().at(-1) || null, serviceStatus: status.some((item) => item.status === "error") ? "partial" : "ok" };
 }
@@ -144,29 +186,48 @@ export default {
   },
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
-    if (url.pathname === "/api/health") return json({ ok: true, service: "calculadora-finanzas" });
+    const cors = corsFor(request, env);
+    const respond = (body, status = 200, headers = {}) => json(body, status, { ...cors.headers, ...headers });
+    if (request.method === "OPTIONS") return new Response(null, { status: cors.allowed ? 204 : 403, headers: cors.headers });
+    if (!cors.allowed) return respond({ error: "Origen no permitido." }, 403);
+    if (url.pathname === "/api/health") return respond({ ok: true, service: "calculadora-finanzas" });
     if (url.pathname === "/api/rates" && request.method === "GET") {
-      try { return json(await getRates(env)); } catch (error) { return json({ rates: [], source: "No disponible", error: error.message }, 503); }
+      try { return respond(await getRates(env)); } catch (error) { return respond({ rates: [], source: "No disponible", error: error.message }, 503); }
     }
     if (url.pathname.startsWith("/api/rates/") && request.method === "GET") {
       try {
         const code = url.pathname.split("/").at(-1);
-        const response = await supabaseRequest(env, `bccr_rates?code=eq.${encodeURIComponent(code)}&select=code,name,short_name,currency,unit,value,reference_date&order=reference_date.desc&limit=30`);
-        return json({ history: (await response.json()).reverse() });
-      } catch (error) { return json({ error: error.message }, 503); }
+        const response = await supabaseRequest(env, `bccr_rates?code=eq.${encodeURIComponent(code)}&select=code,name,short_name,currency,unit,value,reference_date&order=reference_date.desc&limit=${RATE_HISTORY_LIMIT}`);
+        return respond({ history: (await response.json()).reverse() });
+      } catch (error) { return respond({ error: error.message }, 503); }
     }
     if (url.pathname === "/api/bccr/refresh" && request.method === "POST") {
-      if (!env.CRON_TRIGGER_SECRET || request.headers.get("X-Job-Secret") !== env.CRON_TRIGGER_SECRET) return json({ error: "No autorizado" }, 401);
-      try { const result = await refreshRates(env); return json({ ok: result.errors.length === 0, ...result }, result.errors.length ? 207 : 200); }
-      catch (error) { return json({ error: error.message }, 500); }
+      if (!env.CRON_TRIGGER_SECRET || request.headers.get("X-Job-Secret") !== env.CRON_TRIGGER_SECRET) return respond({ error: "No autorizado" }, 401);
+      try { const result = await refreshRates(env); return respond({ ok: result.errors.length === 0, ...result }, result.errors.length ? 207 : 200); }
+      catch (error) { return respond({ error: error.message }, 500); }
     }
     if (url.pathname === "/api/loans/calculate" && request.method === "POST") {
-      try { return json(calculateLoan(await request.json())); } catch (error) { return json({ error: error.message }, 400); }
+      try {
+        if (await isCalculationRateLimited(request, env, "loan")) return respond({ error: "Demasiadas solicitudes. Intente de nuevo en un minuto." }, 429, { "Retry-After": "60" });
+        const body = await readJsonBody(request);
+        const input = {
+          principal: body.principal, annualRate: body.annualRate, months: body.months,
+          extraPayment: body.extraPayment, extraMode: body.extraMode, extraStartMonth: body.extraStartMonth,
+          rateChanges: Array.isArray(body.rateChanges) ? body.rateChanges.map((change) => ({ month: change?.month, annualRate: change?.annualRate })) : body.rateChanges,
+        };
+        return respond(calculateLoan(input));
+      } catch (error) { return respond({ error: error.message }, error.status || 400); }
     }
     if (url.pathname === "/api/debt/strategies" && request.method === "POST") {
-      try { return json(calculateDebtStrategies(await request.json())); } catch (error) { return json({ error: error.message }, 400); }
+      try {
+        if (await isCalculationRateLimited(request, env, "debt")) return respond({ error: "Demasiadas solicitudes. Intente de nuevo en un minuto." }, 429, { "Retry-After": "60" });
+        const body = await readJsonBody(request);
+        const debts = Array.isArray(body.debts)
+          ? body.debts.map((debt) => ({ balance: debt?.balance, annualRate: debt?.annualRate, minimumPayment: debt?.minimumPayment }))
+          : body.debts;
+        return respond(calculateDebtStrategies({ monthlyBudget: body.monthlyBudget, debts }));
+      } catch (error) { return respond({ error: error.message }, error.status || 400); }
     }
-    return json({ error: "Ruta no encontrada" }, 404);
+    return respond({ error: "Ruta no encontrada" }, 404);
   },
 };

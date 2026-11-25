@@ -53,6 +53,8 @@ create table if not exists public.bccr_job_logs (
   error text,
   executed_at timestamptz not null default now()
 );
+alter table public.bccr_job_logs add column if not exists duration_ms integer check (duration_ms >= 0);
+create index if not exists bccr_job_logs_executed_at_idx on public.bccr_job_logs (executed_at desc);
 
 alter table public.bccr_rates enable row level security;
 alter table public.bccr_rate_status enable row level security;

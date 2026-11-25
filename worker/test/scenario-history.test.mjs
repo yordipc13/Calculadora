@@ -30,3 +30,15 @@ test("reuses the saved rate for a fixed-rate scenario", () => {
   assert.equal(result.annualRate, 17.25);
   assert.equal(result.source, "Tasa fija guardada");
 });
+
+test("keeps the saved base rate for a manually entered variable-rate scenario", () => {
+  const result = resolveScenarioRate({
+    rateType: "tbp",
+    annualRate: 16,
+    spread: 2,
+    rateSnapshot: { source: "Manual", benchmarkCode: "423", baseRate: 16 },
+  }, rates, "2026-11-15");
+  assert.equal(result.baseRate, 16);
+  assert.equal(result.annualRate, 18);
+  assert.equal(result.source, "Manual");
+});

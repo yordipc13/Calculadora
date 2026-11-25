@@ -1,94 +1,59 @@
-# Pendientes e integración
+﻿# Estado de implementación y pendientes
 
-## Integración oficial del BCCR
+## Implementado y validado
 
-- Confirmar credenciales, token, suscripción y límites de uso del servicio SDDE.
-- Definir el contrato de cada indicador: TBP, TED, TPM y topes máximos legales.
-- Implementar un job diferenciado por frecuencia:
-  - TBP/TED/TPM: consulta diaria o semanal.
-  - Topes legales: revisión periódica o semestral.
-- Conservar `valid_from`, `fetched_at`, fuente y estado de vigencia.
-- Mantener la última tasa válida ante fallos, respuestas vacías o cambios de formato.
-- Validar rangos numéricos y rechazar valores nulos.
-- Registrar ejecuciones, errores, tiempos de respuesta y fallos en un proveedor de logs.
-- Agregar pruebas unitarias y de integración con datos de ejemplo y respuestas simuladas del BCCR.
-- Definir responsabilidad jurídica y procedimiento para cambios en topes legales.
+### API del BCCR y Worker
+- [x] Worker desplegado en Cloudflare: `https://calculadora-finanzas.developpage.workers.dev`.
+- [x] Proyecto Supabase conectado; el endpoint `GET /api/rates` devuelve datos desde sus tablas.
+- [x] Job manual ejecutado con éxito y cinco indicadores recibidos del BCCR: TBP (423), TED (23698), compra (317), venta (318) y TPM (3541).
+- [x] Cron configurado para todos los días a las 18:30, hora de Costa Rica (00:30 UTC).
+- [x] Rutas de salud, tasas, historial por indicador, cálculo de préstamos, estrategias de deuda y actualización protegida del BCCR.
+- [x] Lecturas del historial limitadas a un máximo de 365 observaciones por indicador. La serie disponible crece con las observaciones que el sistema guarda; no se hizo una carga retrospectiva completa de 365 días.
+- [x] Se conservan datos válidos cuando falla una consulta y no se agrega una fila si el valor de la tasa no cambió.
+- [x] El alcance acordado excluye las tasas activas promedio y los topes de la Ley de Usura.
 
-## Historial y recálculo
+### Calculadora, deudas e historial
+- [x] Amortización mensual tipo francés, tasas fijas y variables, spread, pagos extra, cronograma, gráfico y exportación CSV.
+- [x] Comparación de estrategias de deuda avalancha y bola de nieve.
+- [x] Guardado local de escenarios con snapshot, restauración, borrado y recálculo histórico frente al dato BCCR disponible en la fecha elegida.
+- [x] Conversión de moneda con los tipos de cambio de compra y venta.
 
-- [x] Guardar en cada escenario local los parámetros, la tasa base, spread, referencia BCCR, fecha de vigencia y resultados originales.
-- [x] Recalcular tasas fijas y variables (TBP/TED/TPM + spread) con el último dato disponible en o antes de la fecha elegida.
-- [x] Guardar la fecha de corte del escenario y la fecha elegida para cada recálculo.
-- [x] Mostrar diferencias de cuota, intereses y total pagado frente al escenario original.
-- [ ] Ampliar la retención del historial BCCR más allá de las últimas 30 observaciones y decidir si los escenarios deben persistirse fuera de este navegador.
+### Visor y extracción local
+- [x] Lectura local de PDF e imágenes, censura manual por bloques, aplanado de la imagen y OCR local en el navegador.
+- [x] Extracción editable de campos financieros y consumos, validaciones, advertencias para valores ambiguos y entrada manual alternativa.
+- [x] El documento original no se envía a la API ni se guarda en Supabase; los resúmenes aceptados se guardan localmente en el navegador.
 
-## Visor previo y privacidad
+## Pendiente de completar o verificar
 
-- [x] Implementar OCR local para PDF e imágenes.
-- [x] Procesar PDF con PDF.js en el navegador.
-- [x] Permitir censura manual visual por bloques sobre PDF e imágenes.
-- Agregar detección asistida editable de cédula, DIMEX, correo, teléfono, dirección, tarjeta y nombres.
-- Separar los datos confirmados del documento original.
-- Implementar confirmación de borrado y una política de retención explícita.
-- No subir documentos ni PII a servidores externos.
-- Revisar la eliminación real de archivos temporales del navegador.
-- Agregar auditoría de consentimiento y de cambios manuales.
+### Publicación y verificación funcional
+- [ ] Publicar en Cloudflare Pages la versión de `index.html` que ya apunta a `https://calculadora-finanzas.developpage.workers.dev/api`.
+- [ ] Abrir el dominio público de la página y confirmar que carga las tasas, el filtro por moneda, la tendencia, “Usar en calculadora” y los módulos de préstamo/deudas.
+- [ ] Confirmar que el cron automático corre en su siguiente horario programado; hasta ahora se confirmó la ejecución manual.
+- [ ] Revisar el resultado y los logs de Cloudflare tras la primera ejecución automática y definir alertas/reintentos si una consulta falla.
 
-## Extracción financiera
+### Privacidad y extracción
+- [x] Definir campos mínimos para estados de tarjeta, préstamos y otros documentos; los datos incompletos se etiquetan como resumen parcial y pueden guardarse si incluyen un monto o consumo válido.
+- [x] Añadir detección asistida de correo, teléfono, identificación, dirección, tarjeta y nombres/titulares etiquetados en concepto y comercios; el texto sigue siendo editable y debe corregirse antes de guardar. La censura visual del documento continúa siendo manual.
+- [x] Proyectar el resumen local a una allowlist de campos y no persistir propiedades OCR ni datos adicionales de transacciones.
+- [x] Añadir confirmación para borrar escenarios, resúmenes y datos temporales locales, conservando la caché pública del BCCR.
+- [x] Definir retención local de 90 días para escenarios y resúmenes; la purga se ejecuta al abrir la página. Archivos y texto OCR siguen en memoria hasta descartar el documento o cerrar/recargar la página.
+- [x] Registrar fecha y versión del consentimiento en cada resumen guardado; no se conserva historial de cada edición manual.
 
-- [x] Extraer y validar fecha, monto, cuota, saldo al corte, pago mínimo y tasa; comercio/concepto permanece editable y manual.
-- [x] Marcar como dudosos los valores repetidos, ilegibles o fuera de rango y exigir corrección manual antes de guardar.
-- [x] Descartar filas de consumo sin fecha o monto válido y evitar guardar resúmenes sin ningún monto financiero válido.
-- [ ] Definir campos obligatorios por tipo de documento; los campos no detectados se informan, pero pueden permanecer vacíos en un resumen parcial.
-- Evitar almacenar nombres, números de cuenta, cédulas o información de tarjetas.
+### Seguridad, operación y calidad
+- [x] Añadir allowlist CORS, límite de 16 KiB para JSON, proyección de campos numéricos y binding de rate limiting para cálculos.
+- [ ] Configurar `CORS_ALLOWED_ORIGINS` con el dominio público definitivo y desplegar el Worker actualizado.
+- [x] Definir CSP y encabezados de seguridad en `_headers`; verificar CSP, rate limiting y encabezados en el dominio público antes de ampliar el uso.
+- [ ] Confirmar con el BCCR las condiciones de uso, cuotas y límites del token; la consulta ya funcionó, pero falta documentar esos límites operativos.
+- [ ] Completar la verificación operativa: el Worker registra éxitos, duración y errores, y purga logs de más de 30 días; falta confirmar la política en Supabase y configurar alertas externas.
+- [ ] Ejecutar y documentar las pruebas automatizadas existentes; se añadieron pruebas simuladas de integración BCCR y regresión de privacidad, pendientes de ejecución.
+- [ ] Revisar la precisión de las simulaciones y del OCR con casos de ejemplo de distintos bancos y dispositivos.
 
-## Seguridad y producción
-
-- Evaluar migración de localStorage a almacenamiento cifrado del servidor solo si la arquitectura lo requiere.
-- Agregar autenticación y autorización si la aplicación pasa de demostración a servicio multipersonal.
-- Agregar CORS, CSP, rate limiting y protección de endpoints si se crea backend.
-- Configurar copias de seguridad, borrado seguro y exportación de datos.
-- Crear pruebas de privacidad y regresión financiera.
+### Decisiones futuras, fuera del alcance actual
+- [ ] Persistencia de escenarios en servidor: decidir autenticación, permisos y retención antes de guardar datos de usuario fuera del navegador.
+- [ ] Autenticación/autorización multipersonal si el producto evoluciona a un servicio con cuentas.
+- [ ] Tasas activas promedio y topes de Ley de Usura: no incluidos en esta fase por decisión de alcance; reabrir solo si se decide añadirlos.
+- [ ] Responsabilidad jurídica y proceso de actualización si se agregan indicadores legales.
 
 ## Referencias financieras consultadas
 
-- BNCR calcula por moneda, monto solicitado y plazo estimado.
-- Colones: muestra el monto mínimo y máximo propio de cada producto.
-- Dólares: vivienda tiene hasta 20 años; colones puede llegar hasta 30 años.
-- Gastos personales consultados: tasa desde 16.51%, monto máximo ₡100,000,000 y mínimo ₡300,000.
-- Unificación consultada: tasa desde 11.5% y monto expresado en dólares/colones según selección.
-- Vivienda consultada: tasa desde 8.6% y plazo máximo de 30 años en colones.
-- Las tasas mostradas son desde referencias orientativas y pueden variar según crédito, garantía, plazo, seguros y análisis formal.
-
-## Estado actual
-
-Avances implementados en esta iteración:
-
-- Fecha de corte obligatoria al guardar una simulación.
-- Snapshot local con moneda, tasa, spread, plazo, cronograma e indicadores calculados.
-- Historial visible de escenarios con restauración y borrado.
-- Validación de monto, tasa y plazo antes de guardar.
-- Límite de vivienda a 20 años en USD y 30 años en CRC.
-- Campos financieros editables en el visor privado.
-- Extracción validada de fecha, montos, cuota, saldo, pago mínimo y tasa; advertencias de campos no detectados o ambiguos.
-- Snapshot de tasa BCCR y recálculo histórico local con comparación de cuota, intereses y total.
-- Limpieza de campos privados al descartar el documento.
-
-
-Implementado en esta versión:
-
-- Amortización mensual tipo francés.
-- Tasa fija y variables representadas con spread configurable.
-- Tabla, gráfico y exportación CSV.
-- Guardado local de escenarios.
-- Historial manual inmutable de tasas.
-- Lectura local de TXT y CSV.
-- Vista previa local básica de imágenes.
-- Detección inicial de patrones comunes.
-- Confirmación manual antes de guardar datos financieros resumidos.
-
-Pendiente de integración real:
-
-- Confirmar credenciales/límites y validar despliegue de la API BCCR/SDDE en producción.
-- Pruebas automatizadas de integración BCCR y regresión de privacidad financiera.
-- Definir si se requiere autenticación y almacenamiento persistente seguro para un servicio multipersonal.
+Los valores y condiciones de BNCR que aparecen en `INVESTIGACION.md` son referencias orientativas, no promesas ni condiciones oficiales para cada usuario. Deben verificarse y fecharse de nuevo antes de usarlos como información vigente.
