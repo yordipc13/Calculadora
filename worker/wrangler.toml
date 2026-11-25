@@ -1,0 +1,11 @@
+name = "calculadora-finanzas"
+main = "src/index.js"
+compatibility_date = "2026-11-24"
+
+[vars]
+BCCR_API_BASE_URL = "https://apim.bccr.fi.cr/SDDE/api/Bccr.GE.SDDE.Publico.Indicadores.API"
+BCCR_TIMEOUT_MS = "15000"
+
+[triggers]
+# Cloudflare cron expressions use UTC; Costa Rica is UTC-6 year-round.
+crons = ["30 0 * * *"]

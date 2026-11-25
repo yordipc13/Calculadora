@@ -26,7 +26,7 @@ Ya tengo el frontend implementado en el repositorio actual. Ahora necesito que a
   3. Calcular estrategias de pago de deudas (método Avalancha vs. Bola de nieve) y alertar si alguna tasa supera los límites máximos permitidos vigentes (Ley de Usura del BCCR).
 
 ### Qué necesito que hagas paso a paso:
-1. Revisa primero la estructura del frontend en este workspace para alinear contratos de datos, endpoints y nombres de campos.
+1. Revisa primero la estructura del frontend en este workspace para alinear contratos de datos, endpoints y nombres de campos. Si el frontend no tiene los campos o la interfaz adecuada para mostrar la información, entonces hazla manteniendo la identidad visual de la interfaz.
 2. Propón el esquema de base de datos (tablas SQL) y las variables de entorno necesarias (como `BCCR_API_TOKEN`).
 3. Implementa el código del job del BCCR con un catálogo configurable de códigos de indicadores y manejo de errores.
 4. Implementa los endpoints/servicios de cálculo de préstamos, procesamiento de resúmenes sanitizados y estrategias de deuda, y conéctalos al frontend existente.

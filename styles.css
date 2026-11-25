@@ -369,6 +369,59 @@ th:first-child, td:first-child { text-align: left; }
 .financial-fields input { min-height: 40px; }
 .consent-box label { color: var(--ink-soft); line-height: 1.5; }
 
+.fx-tool {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.3fr) minmax(130px, .7fr) minmax(200px, 1fr) minmax(180px, 1fr);
+  align-items: end;
+  gap: 18px;
+  padding: 22px 3.5vw;
+  border-bottom: 1px solid var(--ink);
+  background: var(--paper-deep);
+}
+.fx-tool h2 { margin: 0 0 6px; font: 700 1.35rem Georgia, "Times New Roman", serif; }
+.fx-tool p:not(.eyebrow) { margin: 0; color: var(--ink-soft); font-size: .8rem; line-height: 1.4; }
+.fx-tool label { display: grid; gap: 7px; color: var(--ink-soft); font-size: .75rem; font-weight: 800; text-transform: uppercase; }
+.fx-result { display: grid; gap: 8px; }
+.fx-result small { color: var(--ink-soft); font-size: .68rem; font-weight: 800; text-transform: uppercase; }
+.fx-result strong { font: 700 1.3rem Georgia, "Times New Roman", serif; }
+.rates-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 3.5vw 18px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+.rates-toolbar > span { color: var(--ink-soft); font-size: .78rem; font-weight: 800; text-transform: uppercase; }
+.entry-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.entry-tabs .active { color: var(--white); background: var(--coral); }
+.rates-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; margin: 0 3.5vw; border: 1px solid var(--ink); background: var(--white); }
+.rate-card { min-width: 0; padding: 26px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.rate-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rate-code { padding: 5px 9px; color: var(--white); background: var(--ink); font-size: .75rem; font-weight: 800; }
+.rate-currency { color: var(--ink-soft); font-size: .72rem; font-weight: 800; }
+.rate-card h2 { min-height: 2.6em; margin: 16px 0 10px; font: 700 1.35rem Georgia, "Times New Roman", serif; }
+.rate-value { display: block; color: var(--coral); font: 700 clamp(1.8rem, 3vw, 2.5rem) Georgia, "Times New Roman", serif; }
+.rate-change { margin: 9px 0 18px; color: var(--teal); font-size: .82rem; font-weight: 800; }
+.rate-card dl { display: grid; gap: 9px; margin: 0; }
+.rate-card dl div { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid #d8d5cc; padding-top: 8px; }
+.rate-card dt { color: var(--ink-soft); font-size: .72rem; }
+.rate-card dd { margin: 0; text-align: right; font-size: .76rem; font-weight: 800; }
+.rate-description { min-height: 2.8em; color: var(--ink-soft); font-size: .83rem; line-height: 1.45; }
+.rate-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.rate-card-actions button { flex: 1; }
+.service-badge { display: inline-block; margin: 16px 0 0; padding: 8px 12px; border: 1px solid var(--teal); color: var(--teal); font: 700 .8rem "Trebuchet MS", sans-serif; }
+.service-badge.stale { border-color: var(--coral); color: #934833; }
+.trend-content { margin-top: 16px; padding: 12px; background: var(--paper); }
+.trend-content p { color: var(--ink-soft); font-size: .75rem; }
+.trend-chart { width: 100%; height: 72px; overflow: visible; }
+.trend-chart polyline { fill: none; stroke: var(--teal); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.redaction-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin: 14px 0; }
+.redaction-controls span { min-width: 120px; text-align: center; color: var(--ink-soft); font-size: .8rem; }
+.redaction-stage { display: grid; place-items: center; min-height: 260px; max-height: 540px; overflow: auto; border: 1px solid var(--line); background: #d9d8d1; }
+#redaction-canvas { display: block; width: auto; max-width: 100%; height: auto; max-height: 520px; touch-action: none; cursor: crosshair; }
+.privacy-note { color: #7c4d25; font-size: .8rem; line-height: 1.5; }
+.transaction-heading { align-items: center; margin-top: 22px; }
+.transaction-heading h3 { margin: 0; font: 700 1.05rem Georgia, "Times New Roman", serif; }
+.privacy-grid .table-wrap input, .privacy-grid .table-wrap select { min-width: 78px; min-height: 38px; padding: 4px; }
+.privacy-grid .table-wrap button { min-height: 34px; padding: 0 9px; }
+.table-wrap [data-debt] { min-width: 75px; }
+.privacy-grid .table-wrap { overflow-x: auto; }
+.privacy-grid .table-wrap table { min-width: 680px; table-layout: auto; }
+
 .rates-layout { grid-template-columns: minmax(260px, 0.55fr) 1fr; }
 .rates-layout label { display: grid; gap: 8px; margin-bottom: 14px; color: var(--ink-soft); }
 
@@ -383,6 +436,9 @@ th:first-child, td:first-child { text-align: left; }
   .dashboard-grid, .privacy-grid, .rates-layout { grid-template-columns: 1fr; }
   .chart-panel { border-right: 0; border-bottom: 1px solid var(--ink); }
   .privacy-grid .panel:first-child, .rates-layout .panel:first-child { border-right: 0; border-bottom: 1px solid var(--ink); }
+  .fx-tool { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rates-grid { grid-template-columns: 1fr; }
+  .rate-card { border-right: 0; }
 }
 
 @media (max-width: 620px) {
@@ -414,4 +470,8 @@ th:first-child, td:first-child { text-align: left; }
   .privacy-grid, .rates-layout { margin: 0 20px; }
   .financial-fields { grid-template-columns: 1fr; }
   .action-row { flex-direction: column; }
+  .fx-tool { grid-template-columns: 1fr; padding: 22px 20px; }
+  .rates-toolbar { margin: 0 20px 16px; align-items: flex-start; flex-direction: column; }
+  .rates-grid { margin: 0 20px; }
+  .rate-card { padding: 20px; }
 }

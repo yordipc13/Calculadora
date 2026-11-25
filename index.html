@@ -45,6 +45,13 @@
           </div>
         </div>
 
+        <section class="fx-tool" aria-label="Conversor de monedas">
+          <div><p class="eyebrow">Tipo de cambio BCCR</p><h2>Conversión referencial</h2><p>Conversión informativa; no altera el saldo ni el contrato del préstamo.</p></div>
+          <label>Monto<input id="fx-amount" type="number" min="0" step="0.01" value="1000" /></label>
+          <label>Conversión<select id="fx-direction"><option value="USD_CRC">Dólares → colones (compra)</option><option value="CRC_USD">Colones → dólares (venta)</option></select></label>
+          <div class="fx-result"><small>Resultado estimado</small><strong id="fx-result">Tasas BCCR pendientes</strong><button class="secondary" id="use-fx-rate" type="button">Usar tipo de cambio</button></div>
+        </section>
+
         <section class="metric-grid" aria-label="Resumen de simulación">
           <article class="metric"><span id="metric-principal">₡0</span><small>Principal</small></article>
           <article class="metric"><span id="metric-term">0 meses</span><small>Plazo</small></article>
@@ -72,13 +79,32 @@
               <input id="amount" type="range" min="100000" max="50000000" step="100000" value="3000000" />
             </label>
             <label>Tasa anual <output id="rate-output">16.0%</output>
-              <input id="rate" type="range" min="0" max="60" step="0.1" value="16" />
+              <input id="rate" type="range" min="0" max="60" step="0.01" value="16" />
             </label>
             <label id="spread-label">Spread adicional <output id="spread-output">0.0%</output>
               <input id="spread" type="range" min="0" max="20" step="0.1" value="0" />
             </label>
             <label>Plazo <output id="term-output">36 meses</output>
               <input id="term" type="range" min="1" max="360" step="1" value="36" />
+            </label>
+            <label>Mes de ajuste de tasa (0 = sin ajuste)
+              <input id="rate-change-month" type="number" min="0" max="360" step="1" value="0" />
+            </label>
+            <label>Nueva tasa anual desde ese mes (%)
+              <input id="rate-change-value" type="number" min="0" max="100" step="0.01" value="16" />
+            </label>
+            <p id="rate-source-note" class="notice">La tasa anual es efectiva. La proyección mantiene la tasa vigente constante, salvo que agregues un ajuste.</p>
+            <label>Abono adicional mensual
+              <input id="extra-payment" type="number" min="0" step="1000" value="0" />
+            </label>
+            <label>Uso del abono
+              <select id="extra-mode">
+                <option value="reduceTerm">Reducir plazo</option>
+                <option value="reducePayment">Reducir cuota</option>
+              </select>
+            </label>
+            <label>Mes inicial del abono
+              <input id="extra-start-month" type="number" min="1" max="360" value="1" />
             </label>
             <label>Fecha de corte
               <input id="cutoff-date" type="date" />
@@ -118,17 +144,37 @@
           <article class="panel">
             <p class="eyebrow">Entrada</p>
             <h2>Cargar documento o texto</h2>
-            <label class="drop-zone" id="drop-zone">
-              <input id="document-file" type="file" accept=".txt,.csv,.pdf,image/*" />
-              <strong>Seleccionar archivo</strong>
-              <span>PDF, imagen, TXT o CSV</span>
-            </label>
-            <label>Texto alternativo
-              <textarea id="document-text" rows="10" placeholder="Pegue aquí contenido no sensible para detectar patrones..."></textarea>
-            </label>
-            <div class="action-row">
-              <button class="primary" id="scan-document" type="button">Analizar patrones</button>
-              <button class="danger" id="clear-document" type="button">Descartar archivo</button>
+            <div class="entry-tabs" role="tablist" aria-label="Modo de ingreso">
+              <button class="secondary active" type="button" data-entry="document">Sanitizar documento</button>
+              <button class="secondary" type="button" data-entry="manual">Ingresar tabla manualmente</button>
+            </div>
+            <div id="document-entry">
+              <label class="drop-zone" id="drop-zone">
+                <input id="document-file" type="file" accept=".pdf,image/*" />
+                <strong>Seleccionar archivo</strong>
+                <span>PDF o imagen procesados localmente en este navegador</span>
+              </label>
+              <div class="redaction-controls">
+                <button class="secondary" id="prev-page" type="button" disabled>Página anterior</button>
+                <span id="page-indicator">Sin documento</span>
+                <button class="secondary" id="next-page" type="button" disabled>Página siguiente</button>
+                <button class="secondary" id="undo-redaction" type="button" disabled>Deshacer bloque</button>
+              </div>
+              <div class="redaction-stage"><canvas id="redaction-canvas" aria-label="Vista del documento para ocultar datos privados"></canvas></div>
+              <p class="privacy-note">Dibuja rectángulos negros sobre nombres, identificación, dirección y números de tarjeta. El OCR solo se ejecuta después de aplanar y revisar esos bloques.</p>
+              <div class="action-row">
+                <button class="primary" id="flatten-ocr" type="button" disabled>Confirmar censura y extraer datos</button>
+                <button class="danger" id="clear-document" type="button">Descartar archivo</button>
+              </div>
+              <label>Texto alternativo ya sanitizado<textarea id="document-text" rows="4" placeholder="Opcional: pegar texto sin datos personales"></textarea></label>
+            </div>
+            <div id="manual-entry" hidden>
+              <p>Agrega los consumos o pega filas CSV con fecha, comercio, monto y moneda.</p>
+              <label>Filas CSV<textarea id="manual-transactions" rows="5" placeholder="2026-11-01,Supermercado,25000,CRC"></textarea></label>
+              <button class="secondary" id="import-transactions" type="button">Cargar filas en la tabla</button>
+            </div>
+            <div id="scan-actions" class="action-row">
+              <button class="secondary" id="scan-document" type="button">Analizar texto sanitizado</button>
             </div>
             <p class="notice" id="privacy-status">El procesamiento inicial ocurre en este navegador. No se envía nada a un servidor.</p>
           </article>
@@ -136,7 +182,7 @@
           <article class="panel">
             <p class="eyebrow">Vista previa</p>
             <h2>Datos detectados</h2>
-            <div id="document-preview" class="document-preview">Sin contenido cargado.</div>
+            <div id="document-preview" class="document-preview">Sin contenido cargado. El original y el archivo aplanado se mantienen solo en memoria del navegador.</div>
             <div class="financial-fields">
               <label>Fecha principal<input id="financial-date" type="date" /></label>
               <label>Comercio o concepto<input id="financial-concept" type="text" maxlength="120" /></label>
@@ -144,10 +190,23 @@
               <label>Cuota<input id="financial-payment" type="text" inputmode="decimal" /></label>
               <label>Saldo al corte<input id="financial-balance" type="text" inputmode="decimal" /></label>
               <label>Tasa anual (%)<input id="financial-rate" type="number" min="0" max="100" step="0.01" /></label>
+              <label>Pago mínimo<input id="financial-minimum" type="number" min="0" step="0.01" /></label>
+              <label>Moneda<select id="financial-currency"><option value="CRC">Colones (₡)</option><option value="USD">Dólares (US$)</option></select></label>
+            </div>
+            <div class="panel-heading transaction-heading"><h3>Consumos extraídos / editables</h3><button class="secondary" id="add-transaction" type="button">Agregar fila</button></div>
+            <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Comercio</th><th>Monto</th><th>Moneda</th><th></th></tr></thead><tbody id="transactions-body"></tbody></table></div>
+            <div class="consent-box">
+              <label><input id="consent" type="checkbox" /> Confirmo que revisé los campos y autorizo guardar únicamente datos financieros anónimos en este dispositivo.</label>
+              <button class="primary" id="save-anonymized" type="button" disabled>Guardar resumen local</button>
             </div>
             <div class="consent-box">
-              <label><input id="consent" type="checkbox" /> Confirmo que revisé la información y autorizo conservar solo los datos financieros anonimizados.</label>
-              <button class="primary" id="save-anonymized" type="button" disabled>Guardar resumen anónimo</button>
+              <label>Presupuesto mensual para pagar deudas
+                <input id="debt-budget" type="number" min="1" step="1000" value="100000" />
+              </label>
+              <div class="panel-heading transaction-heading"><h3>Deudas a comparar</h3><div class="action-row"><button class="secondary" id="add-debt" type="button">Agregar desde resumen</button><button class="secondary" id="add-empty-debt" type="button">Agregar deuda manual</button></div></div>
+              <div class="table-wrap"><table><thead><tr><th>Deuda</th><th>Saldo</th><th>Tasa %</th><th>Mínimo</th><th>Moneda</th><th></th></tr></thead><tbody id="debts-body"></tbody></table></div>
+              <button class="secondary" id="compare-debt-strategies" type="button">Comparar Avalancha / Bola de nieve</button>
+              <div id="debt-strategy-result" class="status"></div>
             </div>
           </article>
         </section>
@@ -155,29 +214,23 @@
 
       <section class="view" id="rates-view">
         <div class="hero compact">
-          <div><p class="eyebrow">Indicadores y vigencias</p><h1>Historial de tasas</h1></div>
+          <div><p class="eyebrow">Datos oficiales del BCCR</p><h1>Tasas e indicadores</h1><p id="rates-service-status" class="service-badge">Consultando el Worker…</p></div>
         </div>
-        <section class="rates-layout">
-          <article class="panel">
-            <p class="eyebrow">Registro manual</p>
-            <h2>Agregar vigencia</h2>
-            <label>Indicador
-              <select id="rate-name"><option>TBP</option><option>TED</option><option>TPM</option><option>Tope legal</option><option>Otra</option></select>
-            </label>
-            <label>Valor anual (%)<input id="rate-value" type="number" min="0" max="100" step="0.01" /></label>
-            <label>Vigencia desde<input id="rate-date" type="date" /></label>
-            <button class="primary" id="add-rate" type="button">Guardar tasa</button>
-            <p class="status" id="rate-status" role="status"></p>
-          </article>
-          <article class="panel">
-            <p class="eyebrow">Historial inmutable</p>
-            <h2>Tasas guardadas</h2>
-            <div class="table-wrap"><table><thead><tr><th>Indicador</th><th>Valor</th><th>Vigencia</th><th>Fuente</th></tr></thead><tbody id="rates-body"></tbody></table></div>
-          </article>
+        <section class="rates-toolbar panel">
+          <span>Filtrar por moneda</span>
+          <div class="entry-tabs" role="group" aria-label="Filtrar tasas por moneda">
+            <button class="secondary active" type="button" data-currency-filter="ALL">Todas</button>
+            <button class="secondary" type="button" data-currency-filter="CRC">Colones (₡)</button>
+            <button class="secondary" type="button" data-currency-filter="USD">Dólares ($)</button>
+          </div>
         </section>
+        <section id="rates-grid" class="rates-grid" aria-live="polite"></section>
       </section>
     </main>
 
-    <script src="script.js"></script>
+    <meta name="api-base" content="/api" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
+  <script src="script.js"></script>
   </body>
 </html>

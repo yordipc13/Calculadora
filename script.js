@@ -1,461 +1,380 @@
-const $ = (selector) => document.querySelector(selector);
-
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const API_BASE = document.querySelector('meta[name="api-base"]')?.content.replace(/\/$/, "") || "/api";
 const state = {
-  schedule: [],
-  sourceText: "",
-  detected: [],
+  schedule: [], rates: [], rateFilter: "ALL", source: null, pdf: null, image: null,
+  page: 1, pageCount: 1, redactions: new Map(), pointerStart: null, flatDocument: null,
+  transactions: [], debts: [], calculationSequence: 0, activeRateCode: null, applyingRate: false,
 };
 
-function formatMoney(value) {
-  const currency = $("#currency")?.value || "CRC";
-  const formatter = new Intl.NumberFormat("es-CR", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 0,
-  });
-  return formatter.format(Number.isFinite(value) ? value : 0);
+function formatMoney(value, currency = $("#currency")?.value || "CRC", digits = 0) {
+  return new Intl.NumberFormat("es-CR", { style: "currency", currency, minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number.isFinite(Number(value)) ? Number(value) : 0);
+}
+function escapeHtml(value) { const node = document.createElement("span"); node.textContent = String(value ?? ""); return node.innerHTML; }
+function parseAmount(value) {
+  if (typeof value === "number") return value;
+  const raw = String(value || "").replace(/[^\d.,-]/g, "");
+  if (!raw) return 0;
+  const comma = raw.lastIndexOf(","); const dot = raw.lastIndexOf(".");
+  const normalized = comma > dot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
+  return Number(normalized) || 0;
 }
 
-function calculateSchedule(principal, annualRate, months, selectedRateType) {
-  const baseRate = selectedRateType === "fixed" ? annualRate : annualRate;
-  const spread = selectedRateType === "fixed" ? 0 : Number($("#spread").value);
-  const monthlyRate = (baseRate + spread) / 100 / 12;
-  const payment = monthlyRate === 0
-    ? principal / months
-    : principal * (monthlyRate * Math.pow(1 + monthlyRate, months)) /
-      (Math.pow(1 + monthlyRate, months) - 1);
-
-  let balance = principal;
-  const schedule = [];
-  let totalInterest = 0;
-
-  for (let month = 1; month <= months; month += 1) {
-    const interest = balance * monthlyRate;
-    let capital = payment - interest;
-
-    if (month === months) {
-      capital = balance;
+function calculateSchedule(principal, annualRate, months) {
+  let monthlyRate = Math.pow(1 + annualRate / 100, 1 / 12) - 1;
+  const regularPayment = monthlyRate === 0 ? principal / months : principal * monthlyRate / (1 - Math.pow(1 + monthlyRate, -months));
+  const extra = Number($("#extra-payment")?.value || 0);
+  const extraStartMonth = Math.max(1, Number($("#extra-start-month")?.value || 1));
+  const extraMode = $("#extra-mode")?.value || "reduceTerm";
+  const changeMonth = Number($("#rate-change-month")?.value || 0);
+  const changeValue = Number($("#rate-change-value")?.value || annualRate);
+  let balance = principal; let payment = regularPayment; let totalInterest = 0; const schedule = [];
+  for (let month = 1; balance > 0.005 && month <= months * 2; month += 1) {
+    if (changeMonth === month && changeMonth > 1) {
+      monthlyRate = Math.pow(1 + changeValue / 100, 1 / 12) - 1;
+      const periodsLeft = Math.max(1, months - month + 1);
+      payment = monthlyRate === 0 ? balance / periodsLeft : balance * monthlyRate / (1 - Math.pow(1 + monthlyRate, -periodsLeft));
     }
-
-    balance = Math.max(0, balance - capital);
+    const interest = balance * monthlyRate;
+    let planned = Math.min(balance + interest, payment);
+    if (planned - interest >= balance) planned = balance + interest;
+    let capital = Math.max(0, planned - interest);
+    const extraCapital = Math.min(Math.max(0, balance - capital), month >= extraStartMonth ? extra : 0);
+    balance = Math.max(0, balance - capital - extraCapital);
+    if (extraMode === "reducePayment" && extraCapital > 0 && balance > 0) {
+      const remaining = Math.max(1, months - month);
+      payment = monthlyRate === 0 ? balance / remaining : balance * monthlyRate / (1 - Math.pow(1 + monthlyRate, -remaining));
+    }
     totalInterest += interest;
-    schedule.push({
-      month,
-      payment: month === months ? capital + interest : payment,
-      capital,
-      interest,
-      balance,
-    });
+    schedule.push({ month, payment: planned + extraCapital, capital: capital + extraCapital, extraCapital, interest, balance });
   }
-
-  return { schedule, payment, totalInterest, monthlyRate: (baseRate + spread) / 100 / 12 };
+  return { schedule, payment: regularPayment, totalInterest, totalPaid: principal + totalInterest };
 }
 
 function updateCalculator() {
-  let principal = Number($("#amount").value);
-  const fixedRate = Number($("#rate").value);
-  const months = Number($("#term").value);
-  const selectedRateType = $("#rate-type").value;
-  const spread = selectedRateType === "fixed" ? 0 : Number($("#spread").value);
-
+  const principalInput = $("#amount"); const currency = $("#currency").value;
+  if (currency === "USD") { principalInput.min = "1000"; principalInput.max = "300000"; principalInput.step = "1000"; $("#term").max = "240"; }
+  else { principalInput.min = "300000"; principalInput.max = "50000000"; principalInput.step = "100000"; $("#term").max = "360"; }
+  if (Number($("#term").value) > Number($("#term").max)) $("#term").value = $("#term").max;
+  $("#extra-start-month").max = $("#term").value;
+  if (Number($("#extra-start-month").value) > Number($("#term").value)) $("#extra-start-month").value = $("#term").value;
+  $("#rate-change-month").max = $("#term").value;
+  if (Number($("#rate-change-month").value) > Number($("#term").value)) $("#rate-change-month").value = "0";
+  if (Number($("#rate-change-month").value) === 1) $("#rate-change-month").value = "0";
+  let principal = Number(principalInput.value);
+  if (principal < Number(principalInput.min)) { principal = Number(principalInput.min); principalInput.value = String(principal); }
+  if (principal > Number(principalInput.max)) { principal = Number(principalInput.max); principalInput.value = String(principal); }
+  const months = Number($("#term").value); const rateType = $("#rate-type").value;
+  const baseRate = Number($("#rate").value); const spread = rateType === "fixed" ? 0 : Number($("#spread").value);
+  const annualRate = baseRate + spread;
   $("#amount-output").textContent = formatMoney(principal);
-  $("#rate-output").textContent = `${fixedRate.toFixed(1)}%`;
-  $("#spread-output").textContent = `${spread.toFixed(1)}%`;
+  $("#rate-output").textContent = `${baseRate.toFixed(2)}%`;
+  $("#spread-output").textContent = `${spread.toFixed(2)}%`;
   $("#term-output").textContent = `${months} meses`;
-  const currency = $("#currency").value;
-  const amountInput = $("#amount");
-  if (currency === "USD" && amountInput.max !== "300000") {
-    amountInput.min = "1000";
-    amountInput.max = "300000";
-    amountInput.step = "1000";
-    if (principal > 300000) {
-      amountInput.value = "300000";
-      principal = 300000;
-    }
-  }
-  if (currency === "CRC" && amountInput.max !== "50000000") {
-    amountInput.min = "300000";
-    amountInput.max = "50000000";
-    amountInput.step = "100000";
-  }
-
-  if (months > (currency === "USD" ? 240 : 360)) {
-    $("#term").value = currency === "USD" ? "240" : "360";
-  }
-
-  $("#spread-label").style.opacity = selectedRateType === "fixed" ? "0.45" : "1";
-  $("#spread").disabled = selectedRateType === "fixed";
-
-  const result = calculateSchedule(principal, fixedRate, months, selectedRateType);
-  state.schedule = result.schedule;
-
+  $("#spread-label").style.opacity = rateType === "fixed" ? "0.45" : "1";
+  $("#spread").disabled = rateType === "fixed";
+  const result = calculateSchedule(principal, annualRate, months); state.schedule = result.schedule;
   $("#metric-principal").textContent = formatMoney(principal);
   $("#metric-term").textContent = `${months} meses`;
-  $("#metric-rate").textContent = `${(fixedRate + spread).toFixed(1)}%`;
-  $("#metric-payment").textContent = formatMoney(result.payment);
+  $("#metric-rate").textContent = `${annualRate.toFixed(2)}%`;
+  $("#metric-payment").textContent = formatMoney(result.schedule[0]?.payment || 0);
   $("#metric-interest").textContent = formatMoney(result.totalInterest);
-  $("#metric-total").textContent = formatMoney(principal + result.totalInterest);
-
-  renderSchedule();
-  drawChart();
+  $("#metric-total").textContent = formatMoney(result.totalPaid);
+  const officialRate = state.activeRateCode && rateByCode(state.activeRateCode);
+  $("#rate-source-note").textContent = officialRate
+    ? `${officialRate.short_name} BCCR: ${Number(officialRate.value).toFixed(2)}% anual efectiva · dato del ${officialRate.reference_date}. Puedes editar la tasa y el spread.`
+    : "Tasa anual efectiva editable. La proyección supone que se mantiene constante, salvo el ajuste indicado.";
+  calculateWithWorker(principal, annualRate, months);
+  renderSchedule(); drawChart(); updateFxResult();
 }
 
 function renderSchedule() {
-  const body = $("#schedule-body");
-  body.innerHTML = state.schedule.map((row) => `
-    <tr>
-      <td>${row.month}</td>
-      <td>${formatMoney(row.payment)}</td>
-      <td>${formatMoney(row.capital)}</td>
-      <td>${formatMoney(row.interest)}</td>
-      <td>${formatMoney(row.balance)}</td>
-    </tr>
-  `).join("");
+  $("#schedule-body").innerHTML = state.schedule.map((row) => `<tr><td>${row.month}</td><td>${formatMoney(row.payment)}</td><td>${formatMoney(Number(row.capital) + Number(row.extraCapital || 0))}</td><td>${formatMoney(row.interest)}</td><td>${formatMoney(row.balance)}</td></tr>`).join("");
 }
-
+async function calculateWithWorker(principal, annualRate, months) {
+  const extraPayment = Number($("#extra-payment").value || 0);
+  const changeMonth = Number($("#rate-change-month").value || 0);
+  if (!API_BASE || (!extraPayment && changeMonth < 2)) return;
+  const sequence = ++state.calculationSequence;
+  const rateChanges = changeMonth >= 2 ? [{ month: changeMonth, annualRate: Number($("#rate-change-value").value) }] : [];
+  try {
+    const response = await fetch(`${API_BASE}/loans/calculate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ principal, annualRate, months, extraPayment, extraMode: $("#extra-mode").value, extraStartMonth: Number($("#extra-start-month").value || 1), rateChanges }) });
+    const result = await response.json(); if (!response.ok) throw new Error(result.error || "No se pudo calcular");
+    if (sequence !== state.calculationSequence) return;
+    state.schedule = result.schedule; renderSchedule(); drawChart();
+    $("#metric-payment").textContent = formatMoney(result.regularPayment);
+    $("#metric-interest").textContent = formatMoney(result.totalInterest);
+    $("#metric-total").textContent = formatMoney(result.totalPaid);
+  } catch (error) { if (sequence === state.calculationSequence) $("#scenario-status").textContent = `Cálculo local mostrado. Worker: ${error.message}`; }
+}
 function drawChart() {
-  const canvas = $("#balance-chart");
-  const rect = canvas.getBoundingClientRect();
-  const scale = window.devicePixelRatio || 1;
-  canvas.width = rect.width * scale;
-  canvas.height = rect.height * scale;
-
-  const context = canvas.getContext("2d");
-  context.scale(scale, scale);
-  context.clearRect(0, 0, rect.width, rect.height);
-
-  const padding = { left: 70, right: 18, top: 18, bottom: 42 };
-  const width = rect.width - padding.left - padding.right;
-  const height = rect.height - padding.top - padding.bottom;
-  if (!state.schedule.length || width <= 0 || height <= 0) return;
-
-  const principal = Number($("#amount").value);
-  context.strokeStyle = "rgba(32, 40, 38, 0.16)";
-  context.fillStyle = "#59635f";
-  context.font = "12px Trebuchet MS";
-  context.lineWidth = 1;
-
-  const steps = 4;
-  for (let index = 0; index <= steps; index += 1) {
-    const y = padding.top + (height * index) / steps;
-    const value = principal * (1 - index / steps);
-    context.beginPath();
-    context.moveTo(padding.left, y);
-    context.lineTo(padding.left + width, y);
-    context.stroke();
-    context.textAlign = "right";
-    context.fillText(formatMoney(value).replace("CRC", "₡"), padding.left - 10, y + 4);
-  }
-
-  context.strokeStyle = "#247f6b";
-  context.fillStyle = "rgba(36, 127, 107, 0.16)";
-  context.lineWidth = 3;
-  context.beginPath();
-
-  state.schedule.forEach((row, index) => {
-    const x = padding.left + (index / Math.max(1, state.schedule.length - 1)) * width;
-    const y = padding.top + (row.balance / principal) * height;
-    if (index === 0) context.moveTo(padding.left, padding.top);
-    context.lineTo(x, y);
-  });
-
-  context.lineTo(padding.left + width, padding.top + height);
-  context.lineTo(padding.left, padding.top + height);
-  context.closePath();
-  context.fill();
-
-  context.beginPath();
-  context.moveTo(padding.left, padding.top);
-  state.schedule.forEach((row, index) => {
-    const x = padding.left + (index / Math.max(1, state.schedule.length - 1)) * width;
-    const y = padding.top + (row.balance / principal) * height;
-    context.lineTo(x, y);
-  });
-  context.stroke();
-
-  context.fillStyle = "#9fa6cc";
-  context.textAlign = "left";
-  context.fillStyle = "#59635f";
-  context.fillText("0", padding.left, rect.height - 12);
-  context.textAlign = "right";
-  context.fillText(String(state.schedule.length), padding.left + width, rect.height - 12);
+  const canvas = $("#balance-chart"); if (!canvas) return;
+  const rect = canvas.getBoundingClientRect(); if (!rect.width || !rect.height) return;
+  const scale = window.devicePixelRatio || 1; canvas.width = rect.width * scale; canvas.height = rect.height * scale;
+  const ctx = canvas.getContext("2d"); ctx.setTransform(scale, 0, 0, scale, 0, 0); ctx.clearRect(0, 0, rect.width, rect.height);
+  const pad = { left: 72, right: 16, top: 16, bottom: 38 }; const w = rect.width - pad.left - pad.right; const h = rect.height - pad.top - pad.bottom;
+  if (!state.schedule.length || w <= 0 || h <= 0) return;
+  const max = Number($("#amount").value) || 1; ctx.font = "12px Trebuchet MS"; ctx.strokeStyle = "rgba(32,40,38,.16)"; ctx.fillStyle = "#59635f";
+  for (let i = 0; i <= 4; i += 1) { const y = pad.top + h * i / 4; ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + w, y); ctx.stroke(); ctx.textAlign = "right"; ctx.fillText(formatMoney(max * (1 - i / 4)), pad.left - 8, y + 4); }
+  ctx.beginPath(); state.schedule.forEach((row, i) => { const x = pad.left + w * i / Math.max(1, state.schedule.length - 1); const y = pad.top + h * row.balance / max; i ? ctx.lineTo(x, y) : ctx.moveTo(x, pad.top); });
+  ctx.lineTo(pad.left + w, pad.top + h); ctx.lineTo(pad.left, pad.top + h); ctx.closePath(); ctx.fillStyle = "rgba(36,127,107,.16)"; ctx.fill();
+  ctx.beginPath(); state.schedule.forEach((row, i) => { const x = pad.left + w * i / Math.max(1, state.schedule.length - 1); const y = pad.top + h * row.balance / max; i ? ctx.lineTo(x, y) : ctx.moveTo(x, pad.top); }); ctx.strokeStyle = "#247f6b"; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = "#59635f"; ctx.textAlign = "left"; ctx.fillText("0", pad.left, rect.height - 8); ctx.textAlign = "right"; ctx.fillText(String(state.schedule.length), pad.left + w, rect.height - 8);
 }
-
-function switchView(viewName) {
-  document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
-  document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
-  $(`#${viewName}-view`).classList.add("active");
-  document.querySelector(`.tab[data-view="${viewName}"]`)?.classList.add("active");
-  if (viewName === "calculator") requestAnimationFrame(drawChart);
+function switchView(name) {
+  $$(".view").forEach((view) => view.classList.toggle("active", view.id === `${name}-view`));
+  $$(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === name));
+  if (name === "calculator") requestAnimationFrame(drawChart);
+  if (name === "rates") loadRates();
 }
-
 function exportSchedule() {
   if (!state.schedule.length) return;
-  const rows = [["Mes", "Cuota", "Capital", "Interes", "Saldo"], ...state.schedule.map((row) => [
-    row.month,
-    row.payment.toFixed(2),
-    row.capital.toFixed(2),
-    row.interest.toFixed(2),
-    row.balance.toFixed(2),
-  ])];
-  const csv = rows.map((row) => row.join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "plan-amortizacion.csv";
-  link.click();
-  URL.revokeObjectURL(link.href);
+  const rows = [["Mes", "Cuota", "Capital", "Interes", "Saldo"], ...state.schedule.map((row) => [row.month, row.payment.toFixed(2), row.capital.toFixed(2), row.interest.toFixed(2), row.balance.toFixed(2)])];
+  const blob = new Blob([rows.map((row) => row.join(",")).join("\n")], { type: "text/csv;charset=utf-8" });
+  const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "plan-amortizacion.csv" }); link.click(); URL.revokeObjectURL(link.href);
 }
-
 function saveScenario() {
-  const principal = Number($("#amount").value);
-  const annualRate = Number($("#rate").value);
-  const months = Number($("#term").value);
-  const currency = $("#currency").value;
-  const cutoffDate = $("#cutoff-date").value;
-
-  if (principal <= 0 || annualRate < 0 || annualRate > 60 || months < 1) {
-    $("#scenario-status").textContent = "Revise monto, tasa y plazo antes de guardar.";
-    return;
-  }
-
-  if (!cutoffDate) {
-    $("#scenario-status").textContent = "Seleccione una fecha de corte para conservar la vigencia.";
-    return;
-  }
-
-  const scenario = {
-    id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-    cutoffDate,
-    currency,
-    principal,
-    rateType: $("#rate-type").value,
-    annualRate,
-    spread: Number($("#spread").value),
-    months,
-    schedule: state.schedule.map((row) => ({ ...row })),
-    snapshot: {
-      payment: state.schedule[0]?.payment || 0,
-      totalInterest: state.schedule.reduce((sum, row) => sum + row.interest, 0),
-      effectiveRate: annualRate + ( $("#rate-type").value === "fixed" ? 0 : Number($("#spread").value) ),
-    },
-  };
-  const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]");
-  scenarios.push(scenario);
-  localStorage.setItem("financialScenarios", JSON.stringify(scenarios));
-  $("#scenario-status").textContent = "Escenario guardado con tasa, moneda y fecha de corte.";
-  loadScenarios();
+  const principal = Number($("#amount").value); const annualRate = Number($("#rate").value); const months = Number($("#term").value); const cutoffDate = $("#cutoff-date").value;
+  if (!(principal > 0) || annualRate < 0 || annualRate > 100 || months < 1 || !cutoffDate) { $("#scenario-status").textContent = "Revise monto, tasa, plazo y fecha de corte."; return; }
+  const scenario = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), cutoffDate, currency: $("#currency").value, principal, rateType: $("#rate-type").value, annualRate, spread: Number($("#spread").value), months, schedule: state.schedule, snapshot: { payment: state.schedule[0]?.payment || 0, totalInterest: state.schedule.reduce((sum, row) => sum + row.interest, 0), effectiveRate: annualRate + Number($("#rate-type").value === "fixed" ? 0 : $("#spread").value) } };
+  const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]"); scenarios.push(scenario); localStorage.setItem("financialScenarios", JSON.stringify(scenarios));
+  $("#scenario-status").textContent = "Escenario guardado localmente."; loadScenarios();
 }
-
 function loadScenarios() {
-  const container = $("#scenario-list");
-  const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]");
-  if (!container) return;
-
-  container.innerHTML = scenarios.length ? scenarios.slice().reverse().map((scenario) => `
-    <article class="scenario-item" data-scenario-id="${escapeHtml(scenario.id)}">
-      <div>
-        <strong>${escapeHtml(scenario.currency)} · ${formatMoney(scenario.principal)}</strong>
-        <span>${Number(scenario.snapshot?.effectiveRate || 0).toFixed(2)}% anual · ${scenario.months} meses</span>
-      </div>
-      <div>
-        <span>Corte: ${escapeHtml(scenario.cutoffDate)}</span>
-        <button type="button" class="secondary restore-scenario" data-scenario-id="${escapeHtml(scenario.id)}">Restaurar</button>
-      </div>
-    </article>
-  `).join("") : '<p class="status">No hay escenarios guardados.</p>';
-
-  container.querySelectorAll(".restore-scenario").forEach((button) => {
-    button.addEventListener("click", () => restoreScenario(button.dataset.scenarioId));
-  });
+  const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]"); const container = $("#scenario-list"); if (!container) return;
+  container.innerHTML = scenarios.length ? scenarios.slice().reverse().map((s) => `<article class="scenario-item"><div><strong>${escapeHtml(s.currency)} · ${formatMoney(s.principal, s.currency)}</strong><span>${Number(s.snapshot?.effectiveRate || 0).toFixed(2)}% anual · ${s.months} meses</span></div><div><span>Corte: ${escapeHtml(s.cutoffDate)}</span><button class="secondary restore-scenario" data-id="${escapeHtml(s.id)}">Restaurar</button></div></article>`).join("") : '<p class="status">No hay escenarios guardados.</p>';
+  $$(".restore-scenario", container).forEach((button) => button.addEventListener("click", () => restoreScenario(button.dataset.id)));
 }
-
 function restoreScenario(id) {
-  const scenarios = JSON.parse(localStorage.getItem("financialScenarios") || "[]");
-  const scenario = scenarios.find((item) => item.id === id);
-  if (!scenario) return;
-
-  $("#currency").value = scenario.currency;
-  $("#amount").value = String(scenario.principal);
-  $("#rate-type").value = scenario.rateType;
-  $("#rate").value = String(scenario.annualRate);
-  $("#spread").value = String(scenario.spread);
-  $("#term").value = String(scenario.months);
-  $("#cutoff-date").value = scenario.cutoffDate;
-  updateCalculator();
-  $("#scenario-status").textContent = "Escenario restaurado con su snapshot original.";
+  const s = JSON.parse(localStorage.getItem("financialScenarios") || "[]").find((item) => item.id === id); if (!s) return;
+  $("#currency").value = s.currency; $("#amount").value = String(s.principal); $("#rate-type").value = s.rateType; $("#rate").value = String(s.annualRate); $("#spread").value = String(s.spread); $("#term").value = String(s.months); $("#cutoff-date").value = s.cutoffDate; updateCalculator(); $("#scenario-status").textContent = "Escenario restaurado.";
 }
 
-function clearScenarios() {
-  localStorage.removeItem("financialScenarios");
-  loadScenarios();
-  $("#scenario-status").textContent = "Escenarios locales eliminados.";
+const rateByCode = (code) => state.rates.find((rate) => String(rate.code) === String(code));
+function renderRateCard(rate) {
+  const currencyLabel = rate.unit === "CRC" ? "CRC por USD" : rate.currency === "USD" ? "USD ($)" : "CRC (₡)";
+  const isPercent = rate.unit === "percent";
+  const current = Number(rate.value);
+  const history = Array.isArray(rate.history) ? rate.history : [];
+  const previous = rate.previous_value === null ? null : Number(rate.previous_value);
+  const change = previous === null ? "Sin dato anterior" : current === previous ? "Sin cambios" : `${current > previous ? "↑ +" : "↓ −"}${new Intl.NumberFormat("es-CR", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(Math.abs(current - previous))}${isPercent ? " pp" : " ₡"}`;
+  const trend = history.length > 1 ? `<svg class="trend-chart" viewBox="0 0 300 72" role="img" aria-label="Tendencia reciente de ${escapeHtml(rate.short_name)}">${(() => { const values = history.map((item) => Number(item.value)); const min = Math.min(...values); const max = Math.max(...values); const span = max - min || 1; return `<polyline points="${values.map((value, index) => `${index * 300 / (values.length - 1)},${64 - (value - min) / span * 56}`).join(" ")}" />`; })()}</svg><p>${history.length} cambios recientes registrados</p>` : '<p>Aún no hay suficientes cambios de valor para mostrar una tendencia.</p>';
+  return `<article class="rate-card"><div class="rate-card-head"><span class="rate-code">${escapeHtml(rate.short_name || rate.name)}</span><span class="rate-currency">${currencyLabel}</span></div><h2>${escapeHtml(rate.name)}</h2><strong class="rate-value">${isPercent ? `${current.toFixed(2)}% anual` : formatMoney(current, "CRC", 2)}</strong><p class="rate-change">${escapeHtml(change)} respecto al valor anterior</p><dl><div><dt>Fecha oficial del dato</dt><dd>${escapeHtml(rate.reference_date || "Sin fecha")}</dd></div><div><dt>Última verificación</dt><dd>${rate.last_verification ? escapeHtml(new Intl.DateTimeFormat("es-CR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Costa_Rica" }).format(new Date(rate.last_verification))) : "Sin verificación"}</dd></div></dl><p class="rate-description">${escapeHtml(rate.description || "Indicador publicado por el BCCR.")}</p><div class="rate-card-actions"><button class="primary use-rate" data-code="${escapeHtml(rate.code)}">Usar en calculadora</button><button class="secondary toggle-trend" aria-expanded="false">Ver tendencia</button></div><div class="trend-content" hidden>${trend}</div></article>`;
 }
-
-function loadRates() {
-  const body = $("#rates-body");
-  const rates = JSON.parse(localStorage.getItem("financialRates") || "[]");
-  body.innerHTML = rates.length ? rates.map((rate) => `
-    <tr><td>${escapeHtml(rate.name)}</td><td>${Number(rate.value).toFixed(2)}%</td><td>${escapeHtml(rate.validFrom)}</td><td>${escapeHtml(rate.source)}</td></tr>
-  `).join("") : '<tr><td colspan="4">Sin tasas registradas.</td></tr>';
+function renderRates() {
+  const visible = state.rates.filter((rate) => state.rateFilter === "ALL" || rate.currency === state.rateFilter);
+  $("#rates-grid").innerHTML = visible.length ? visible.map(renderRateCard).join("") : '<article class="panel"><p>No hay datos BCCR disponibles todavía. El Worker conservará y mostrará el último dato válido cuando la API responda.</p></article>';
+  $$(".use-rate").forEach((button) => button.addEventListener("click", () => useRate(button.dataset.code)));
+  $$(".toggle-trend").forEach((button) => button.addEventListener("click", () => { const content = button.closest(".rate-card").querySelector(".trend-content"); content.hidden = !content.hidden; button.setAttribute("aria-expanded", String(!content.hidden)); button.textContent = content.hidden ? "Ver tendencia" : "Ocultar tendencia"; }));
 }
-
-function addRate() {
-  const name = $("#rate-name").value;
-  const value = Number($("#rate-value").value);
-  const validFrom = $("#rate-date").value;
-  if (!Number.isFinite(value) || value < 0 || value > 100 || !validFrom) {
-    $("#rate-status").textContent = "Ingrese un valor entre 0 y 100 y una fecha válida.";
-    return;
+async function loadRates() {
+  const badge = $("#rates-service-status"); let stale = false;
+  try {
+    const response = await fetch(`${API_BASE}/rates`, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`Worker HTTP ${response.status}`);
+    const payload = await response.json(); state.rates = payload.rates || [];
+    localStorage.setItem("bccrRatesPublicCache", JSON.stringify({ rates: state.rates, checkedAt: payload.checkedAt }));
+  } catch {
+    stale = true; const cached = JSON.parse(localStorage.getItem("bccrRatesPublicCache") || "null"); state.rates = cached?.rates || [];
   }
-
-  const rates = JSON.parse(localStorage.getItem("financialRates") || "[]");
-  rates.push({
-    id: crypto.randomUUID(),
-    name,
-    value,
-    validFrom,
-    source: "Carga manual",
-    fetchedAt: new Date().toISOString(),
-  });
-  localStorage.setItem("financialRates", JSON.stringify(rates));
-  $("#rate-status").textContent = "Tasa registrada sin modificar registros anteriores.";
-  $("#rate-value").value = "";
-  loadRates();
+  const hasError = state.rates.some((rate) => rate.service_status === "error");
+  const verification = state.rates.map((rate) => rate.last_verification).filter(Boolean).sort().at(-1);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Costa_Rica", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const checkedToday = verification && new Intl.DateTimeFormat("en-CA", { timeZone: "America/Costa_Rica", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(verification)) === today;
+  const latestReference = state.rates.map((rate) => rate.reference_date).filter(Boolean).sort().at(-1);
+  badge.textContent = !state.rates.length && stale ? "Worker sin conexión · todavía no hay datos locales" : stale || hasError ? `Mostrando último dato válido${latestReference ? ` del ${new Intl.DateTimeFormat("es-CR", { dateStyle: "short", timeZone: "America/Costa_Rica" }).format(new Date(`${latestReference}T12:00:00`))}` : ""}` : checkedToday ? "Actualizado hoy · BCCR" : verification ? `Verificado ${new Intl.DateTimeFormat("es-CR", { dateStyle: "short", timeZone: "America/Costa_Rica" }).format(new Date(verification))}` : "A la espera de la primera sincronización";
+  badge.classList.toggle("stale", stale || hasError); renderRates(); updateFxResult();
 }
-
-function escapeHtml(value) {
-  const node = document.createElement("div");
-  node.textContent = String(value);
-  return node.innerHTML;
-}
-
-function detectSensitivePatterns(text) {
-  const patterns = [
-    { name: "Identificación", regex: /\b(?:\d{1}-\d{4}-\d{4}|\d{9,12}|[A-Z]{1,2}-\d{6,12})\b/gi },
-    { name: "Correo", regex: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi },
-    { name: "Teléfono", regex: /(?:\+506\s*)?(?:\d[\s-]?){7,11}\d/gi },
-    { name: "Tarjeta", regex: /\b(?:\d[ -]*?){13,19}\b/g },
-    { name: "Monto", regex: /(?:₡|CRC|USD|US\$)\s*[\d.,]+/gi },
-  ];
-
-  const matches = [];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern.regex)) {
-      matches.push({ name: pattern.name, value: match[0] });
-    }
-  }
-  return matches;
-}
-
-function scanDocument() {
-  const text = $("#document-text").value || state.sourceText;
-  if (!text.trim()) {
-    $("#privacy-status").textContent = "Agregue texto o cargue un archivo compatible.";
-    return;
-  }
-
-  state.detected = detectSensitivePatterns(text);
-  let preview = escapeHtml(text);
-  for (const match of state.detected) {
-    preview = preview.replaceAll(escapeHtml(match.value), `<mark>${escapeHtml(match.value)}</mark>`);
-  }
-
-  $("#document-preview").innerHTML = preview;
-
-  const dates = text.match(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g) || [];
-  const amounts = text.match(/(?:₡|CRC|USD|US\$)\s*[\d.,]+/gi) || [];
-  const rateMatch = text.match(/(?:tasa|interest|interés)[^\d]{0,20}(\d+(?:[.,]\d+)?)\s*%/i);
-
-  if (dates[0]) $("#financial-date").value = normalizeDate(dates[0]);
-  if (amounts[0]) $("#financial-amount").value = amounts[0];
-  if (amounts[1]) $("#financial-payment").value = amounts[1];
-  if (amounts[2]) $("#financial-balance").value = amounts[2];
-  if (rateMatch) $("#financial-rate").value = rateMatch[1].replace(",", ".");
-
-  $("#privacy-status").textContent = `Se detectaron ${state.detected.length} patrones posibles. Complete y confirme manualmente los campos financieros.`;
-  $("#consent").checked = false;
-  $("#save-anonymized").disabled = true;
-}
-
-async function readDocumentFile(file) {
-  $("#privacy-status").textContent = "Leyendo el archivo localmente...";
-  if (file.type === "application/pdf") {
-    state.sourceText = "[PDF cargado] Este visor requiere OCR/extracción local para convertir el contenido en texto. El archivo no se ha enviado a ningún servidor.";
-  } else if (file.type.startsWith("image/")) {
-    const url = URL.createObjectURL(file);
-    state.sourceText = "[IMAGEN CARGADA] La detección automática requiere OCR local. Revise visualmente antes de guardar datos.";
-    $("#document-preview").innerHTML = `<img src="${url}" alt="Vista previa local" style="max-width:100%; max-height:380px" />`;
+function useRate(code) {
+  const rate = rateByCode(code); if (!rate) return;
+  switchView("calculator");
+  if (rate.unit === "percent") {
+    state.activeRateCode = String(code);
+    $("#currency").value = rate.currency;
+    $("#rate-type").value = ({ "423": "tbp", "23698": "ted", "3541": "tpm" })[String(code)] || "fixed";
+    $("#rate").value = String(Number(rate.value).toFixed(2));
+    updateCalculator();
+    $("#spread").focus();
   } else {
-    state.sourceText = await file.text();
+    $("#fx-direction").value = String(code) === "317" ? "USD_CRC" : "CRC_USD";
+    updateFxResult(); $("#fx-amount").focus();
+    $("#scenario-status").textContent = `Tipo de cambio ${rate.short_name} cargado en el conversor.`;
   }
-  $("#document-text").value = state.sourceText;
-  $("#privacy-status").textContent = "Archivo leído en memoria. Revise antes de guardar.";
 }
+function selectRateType() {
+  const code = ({ tbp: "423", ted: "23698", tpm: "3541" })[$("#rate-type").value];
+  const rate = code && rateByCode(code);
+  if (!rate) { state.activeRateCode = null; updateCalculator(); return; }
+  $("#currency").value = rate.currency; state.activeRateCode = code; state.applyingRate = true; $("#rate").value = String(Number(rate.value).toFixed(2)); state.applyingRate = false; updateCalculator();
+}
+function changeCurrency() {
+  const currentType = $("#rate-type").value;
+  const code = ({ tbp: "423", ted: "23698", tpm: "3541" })[currentType];
+  const rate = code && rateByCode(code);
+  if (currentType !== "fixed" && (!rate || rate.currency !== $("#currency").value)) { $("#rate-type").value = "fixed"; state.activeRateCode = null; }
+  updateCalculator();
+}
+function updateFxResult() {
+  const amount = Number($("#fx-amount")?.value || 0); const direction = $("#fx-direction")?.value || "USD_CRC";
+  const code = direction === "USD_CRC" ? "317" : "318"; const rate = rateByCode(code);
+  $("#fx-result").textContent = rate ? formatMoney(direction === "USD_CRC" ? amount * Number(rate.value) : amount / Number(rate.value), direction === "USD_CRC" ? "CRC" : "USD", 2) : "Tasas BCCR pendientes";
+}
+function useFxRate() { const code = $("#fx-direction").value === "USD_CRC" ? "317" : "318"; const rate = rateByCode(code); if (!rate) return; $("#fx-amount").value = String(Number($("#amount").value) || 0); updateFxResult(); $("#scenario-status").textContent = `Conversión referencial lista con tipo de cambio ${rate.short_name}. No modifica el préstamo.`; }
 
+function drawRedactions() {
+  const canvas = $("#redaction-canvas"); const rects = state.redactions.get(state.page) || [];
+  const ctx = canvas.getContext("2d"); rects.forEach((r) => { ctx.fillStyle = "#000"; ctx.fillRect(r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height); });
+}
+async function renderDocumentPage() {
+  const canvas = $("#redaction-canvas"); const ctx = canvas.getContext("2d");
+  if (state.pdf) {
+    const page = await state.pdf.getPage(state.page); const viewport = page.getViewport({ scale: Math.min(1.6, 1100 / page.getViewport({ scale: 1 }).width) });
+    canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height); await page.render({ canvasContext: ctx, viewport }).promise;
+  } else if (state.image) {
+    const image = state.image; const scale = Math.min(1, 1200 / image.width); canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale); ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  }
+  drawRedactions();
+  $("#page-indicator").textContent = state.pdf ? `Página ${state.page} de ${state.pageCount}` : "Imagen · página 1 de 1";
+  $("#prev-page").disabled = state.page <= 1; $("#next-page").disabled = state.page >= state.pageCount;
+  $("#flatten-ocr").disabled = !state.pdf && !state.image;
+  $("#undo-redaction").disabled = !(state.redactions.get(state.page) || []).length;
+}
+async function readDocumentFile(file) {
+  clearDocument({ keepStatus: true }); state.source = file; state.redactions = new Map(); state.flatDocument = null;
+  $("#privacy-status").textContent = "Abriendo el archivo en memoria local…";
+  try {
+    if (file.size > 25 * 1024 * 1024) throw new Error("El documento supera el límite local de 25 MB.");
+    if (file.type === "application/pdf") {
+      if (!window.pdfjsLib) throw new Error("PDF.js no se cargó. Compruebe la conexión y vuelva a abrir el archivo.");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      state.pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise; state.pageCount = state.pdf.numPages;
+      if (state.pageCount > 40) throw new Error("El PDF supera el límite local de 40 páginas.");
+    } else if (file.type.startsWith("image/")) {
+      state.image = await createImageBitmap(file);
+      if (state.image.width * state.image.height > 40000000) throw new Error("La imagen supera el límite local de 40 megapíxeles.");
+      state.pageCount = 1; state.page = 1;
+    } else { throw new Error("Para proteger el documento, cargue PDF o imagen. Puede ingresar CSV en la pestaña manual."); }
+    await renderDocumentPage(); $("#privacy-status").textContent = "Dibuja rectángulos negros sobre cada dato personal. Luego confirma para aplanar y extraer localmente.";
+  } catch (error) { clearDocument({ keepStatus: true }); $("#privacy-status").textContent = error.message; }
+}
+function pointerPosition(event) { const canvas = $("#redaction-canvas"); const r = canvas.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (event.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (event.clientY - r.top) / r.height)) }; }
+function beginRedaction(event) { if (!state.source) return; event.preventDefault(); state.pointerStart = pointerPosition(event); $("#redaction-canvas").setPointerCapture(event.pointerId); }
+function finishRedaction(event) {
+  if (!state.pointerStart) return; const end = pointerPosition(event); const x = Math.min(state.pointerStart.x, end.x); const y = Math.min(state.pointerStart.y, end.y); const w = Math.abs(end.x - state.pointerStart.x); const h = Math.abs(end.y - state.pointerStart.y); state.pointerStart = null;
+  if (w < 0.004 || h < 0.004) return;
+  const rects = state.redactions.get(state.page) || []; rects.push({ x, y, w, h }); state.redactions.set(state.page, rects); renderDocumentPage();
+}
+function undoRedaction() { const rects = state.redactions.get(state.page) || []; rects.pop(); state.redactions.set(state.page, rects); renderDocumentPage(); }
+async function flattenAndExtract() {
+  if (!state.pdf && !state.image) return;
+  const button = $("#flatten-ocr"); button.disabled = true; button.textContent = "Aplanando y extrayendo…";
+  try {
+    const canvases = [];
+    if (state.pdf) {
+      for (let pageNumber = 1; pageNumber <= state.pageCount; pageNumber += 1) {
+        const page = await state.pdf.getPage(pageNumber); const viewport = page.getViewport({ scale: Math.min(1.6, 1100 / page.getViewport({ scale: 1 }).width) });
+        const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height); await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+        (state.redactions.get(pageNumber) || []).forEach((r) => { const c = canvas.getContext("2d"); c.fillStyle = "#000"; c.fillRect(r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height); }); canvases.push(canvas);
+      }
+    } else {
+      const canvas = document.createElement("canvas"); canvas.width = $("#redaction-canvas").width; canvas.height = $("#redaction-canvas").height; canvas.getContext("2d").drawImage($("#redaction-canvas"), 0, 0); canvases.push(canvas);
+    }
+    const flattenedPages = await Promise.all(canvases.map((canvas) => new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("No se pudo aplanar la página")), "image/png"))));
+    if (!window.Tesseract) throw new Error("Tesseract.js no se cargó. Compruebe la conexión y vuelva a intentar.");
+    const worker = await Tesseract.createWorker("spa"); const text = [];
+    try { for (const page of flattenedPages) text.push((await worker.recognize(page)).data.text); }
+    finally { await worker.terminate(); }
+    state.pdf?.destroy(); state.pdf = null; state.image?.close?.(); state.image = null; state.source = null; state.flatDocument = null; $("#document-file").value = "";
+    $("#document-preview").innerHTML = `<p>Documento aplanado en memoria; ${canvases.length} página(s) procesada(s). No se guarda ni se transmite.</p><pre>${escapeHtml(text.join("\n"))}</pre>`;
+    state.sourceText = text.join("\n"); extractFinancialData(state.sourceText); $("#privacy-status").textContent = "OCR local completado. Corrige y revisa los campos y cada consumo antes de comparar deudas.";
+    $("#redaction-canvas").getContext("2d").clearRect(0, 0, $("#redaction-canvas").width, $("#redaction-canvas").height); $("#page-indicator").textContent = "Documento aplanado y descartado";
+  } catch (error) { $("#privacy-status").textContent = `No se pudo completar el OCR local: ${error.message}`; }
+  button.textContent = "Confirmar censura y extraer datos"; button.disabled = !state.source;
+}
 function normalizeDate(value) {
-  const parts = value.match(/\d+/g);
-  if (!parts || parts.length !== 3) return "";
-  let year = Number(parts[2]);
-  if (year < 100) year += 2000;
-  return `${String(year).padStart(4, "0")}-${String(parts[1]).padStart(2, "0")}-${String(parts[0]).padStart(2, "0")}`;
+  const dmy = value.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/); if (!dmy) return "";
+  let year = Number(dmy[3]); if (year < 100) year += 2000;
+  return `${String(year).padStart(4, "0")}-${String(dmy[2]).padStart(2, "0")}-${String(dmy[1]).padStart(2, "0")}`;
 }
-
+function extractFinancialData(text) {
+  const rate = text.match(/(?:tasa|inter[eé]s)[^\d%]{0,35}(\d{1,2}(?:[.,]\d{1,4})?)\s*%/i); if (rate) $("#financial-rate").value = rate[1].replace(",", ".");
+  const balance = text.match(/(?:saldo\s*(?:total|al corte|actual)?|balance)[^\d]{0,25}(?:₡|CRC|US\$|USD)?\s*([\d.,]+)/i); if (balance) $("#financial-balance").value = parseAmount(balance[1]);
+  const minimum = text.match(/(?:pago\s*m[ií]nimo|minimum\s*payment)[^\d]{0,25}(?:₡|CRC|US\$|USD)?\s*([\d.,]+)/i); if (minimum) $("#financial-minimum").value = parseAmount(minimum[1]);
+  const due = text.match(/(?:fecha\s*(?:de\s*)?(?:corte|estado)|statement\s*date)[^\d]{0,20}(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i); if (due) $("#financial-date").value = normalizeDate(due[1]);
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); const transactions = [];
+  for (const line of lines) {
+    const match = line.match(/(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+(.+?)\s+(?:₡|CRC|US\$|USD)?\s*(-?[\d][\d.,]*)\s*$/i);
+    if (!match || /saldo|pago m[ií]nimo|total|tasa/i.test(line)) continue;
+    const date = normalizeDate(match[1]); const amount = parseAmount(match[3]); if (date && amount > 0 && match[2].trim().length > 1) transactions.push({ date, concept: match[2].trim(), amount, currency: /US\$|USD/i.test(line) ? "USD" : $("#financial-currency").value });
+  }
+  state.transactions = transactions; renderTransactions(); renderDebts();
+}
+function renderTransactions() {
+  $("#transactions-body").innerHTML = state.transactions.map((row, index) => `<tr><td><input type="date" data-tx="${index}" data-field="date" value="${escapeHtml(row.date)}"></td><td><input type="text" maxlength="120" data-tx="${index}" data-field="concept" value="${escapeHtml(row.concept)}"></td><td><input type="number" min="0" step="0.01" data-tx="${index}" data-field="amount" value="${Number(row.amount) || 0}"></td><td><select data-tx="${index}" data-field="currency"><option value="CRC" ${row.currency === "CRC" ? "selected" : ""}>CRC</option><option value="USD" ${row.currency === "USD" ? "selected" : ""}>USD</option></select></td><td><button type="button" class="danger remove-transaction" data-index="${index}" aria-label="Eliminar consumo">×</button></td></tr>`).join("");
+  $$('[data-tx]', $("#transactions-body")).forEach((input) => input.addEventListener("change", () => { const row = state.transactions[Number(input.dataset.tx)]; row[input.dataset.field] = input.dataset.field === "amount" ? Number(input.value) : input.value; }));
+  $$(".remove-transaction").forEach((button) => button.addEventListener("click", () => { state.transactions.splice(Number(button.dataset.index), 1); renderTransactions(); }));
+}
+function renderDebts() {
+  $("#debts-body").innerHTML = state.debts.map((debt, index) => `<tr><td><input type="text" maxlength="100" data-debt="${index}" data-field="name" value="${escapeHtml(debt.name)}"></td><td><input type="number" min="0" step="0.01" data-debt="${index}" data-field="balance" value="${Number(debt.balance) || 0}"></td><td><input type="number" min="0" max="100" step="0.01" data-debt="${index}" data-field="annualRate" value="${Number(debt.annualRate) || 0}"></td><td><input type="number" min="0" step="0.01" data-debt="${index}" data-field="minimumPayment" value="${Number(debt.minimumPayment) || 0}"></td><td><select data-debt="${index}" data-field="currency"><option value="CRC" ${debt.currency === "CRC" ? "selected" : ""}>CRC</option><option value="USD" ${debt.currency === "USD" ? "selected" : ""}>USD</option></select></td><td><button class="danger remove-debt" data-index="${index}" type="button" aria-label="Quitar deuda">×</button></td></tr>`).join("");
+  $$('[data-debt]', $("#debts-body")).forEach((input) => input.addEventListener("change", () => { const debt = state.debts[Number(input.dataset.debt)]; debt[input.dataset.field] = ["balance", "annualRate", "minimumPayment"].includes(input.dataset.field) ? Number(input.value) : input.value; }));
+  $$(".remove-debt").forEach((button) => button.addEventListener("click", () => { state.debts.splice(Number(button.dataset.index), 1); renderDebts(); }));
+}
+function addTransaction() { state.transactions.push({ date: "", concept: "", amount: 0, currency: $("#financial-currency").value }); renderTransactions(); }
+function addCurrentDebt() {
+  const balance = parseAmount($("#financial-balance").value); const annualRate = Number($("#financial-rate").value); const minimumPayment = Number($("#financial-minimum").value || parseAmount($("#financial-payment").value));
+  if (!(balance > 0) || !(annualRate >= 0)) { $("#debt-strategy-result").textContent = "Complete un saldo y una tasa válidos en los campos del resumen."; return; }
+  state.debts.push({ name: $("#financial-concept").value.trim() || `Deuda ${state.debts.length + 1}`, balance, annualRate, minimumPayment: parseAmount(minimumPayment), currency: $("#financial-currency").value }); renderDebts();
+}
+function addEmptyDebt() { state.debts.push({ name: `Deuda ${state.debts.length + 1}`, balance: 0, annualRate: 0, minimumPayment: 0, currency: $("#financial-currency").value }); renderDebts(); }
+function importTransactions() {
+  const lines = $("#manual-transactions").value.split(/\r?\n/).filter((line) => line.trim()); const rows = [];
+  for (const line of lines) { const [dateRaw, concept, amountRaw, currencyRaw] = line.split(","); const date = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw?.trim()) ? dateRaw.trim() : normalizeDate(dateRaw?.trim() || ""); const amount = parseAmount(amountRaw); const currency = ["USD", "CRC"].includes(currencyRaw?.trim().toUpperCase()) ? currencyRaw.trim().toUpperCase() : $("#financial-currency").value; if (date && concept?.trim() && amount > 0) rows.push({ date, concept: concept.trim(), amount, currency }); }
+  state.transactions.push(...rows); renderTransactions(); $("#privacy-status").textContent = `${rows.length} fila(s) cargadas. Revísalas en la tabla editable.`;
+}
 function saveAnonymizedSummary() {
   if (!$("#consent").checked) return;
-  const financialFields = {
-    date: $("#financial-date").value,
-    concept: $("#financial-concept").value.trim(),
-    amount: $("#financial-amount").value.trim(),
-    payment: $("#financial-payment").value.trim(),
-    balance: $("#financial-balance").value.trim(),
-    annualRate: $("#financial-rate").value,
-  };
-  const summaries = JSON.parse(localStorage.getItem("anonymizedDebtSummaries") || "[]");
-  summaries.push({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), financialFields });
-  localStorage.setItem("anonymizedDebtSummaries", JSON.stringify(summaries));
-  $("#privacy-status").textContent = "Resumen financiero anónimo guardado localmente. El documento original no se conserva.";
-  clearDocument();
+  const summary = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), date: $("#financial-date").value, concept: $("#financial-concept").value.trim(), amount: parseAmount($("#financial-amount").value), payment: parseAmount($("#financial-payment").value), minimumPayment: parseAmount($("#financial-minimum").value), balance: parseAmount($("#financial-balance").value), annualRate: Number($("#financial-rate").value || 0), currency: $("#financial-currency").value, transactions: state.transactions.map((row) => ({ ...row })) };
+  const saved = JSON.parse(localStorage.getItem("anonymizedDebtSummaries") || "[]"); saved.push(summary); localStorage.setItem("anonymizedDebtSummaries", JSON.stringify(saved));
+  $("#privacy-status").textContent = "Resumen financiero guardado en este dispositivo. No se envió al servidor.";
+}
+async function compareDebtStrategies() {
+  const budget = Number($("#debt-budget").value); const currency = $("#financial-currency").value;
+  const debts = state.debts.filter((debt) => (debt.currency || currency) === currency);
+  const resultBox = $("#debt-strategy-result");
+  if (!debts.length) { resultBox.textContent = "Agrega al menos una deuda de la moneda seleccionada."; return; }
+  if (debts.length !== state.debts.length) { resultBox.textContent = `La comparación usa ${currency}; separa deudas en colones y dólares para comparar cada grupo con su propio presupuesto.`; return; }
+  try {
+    const numericDebts = debts.map(({ balance, annualRate, minimumPayment }) => ({ balance, annualRate, minimumPayment }));
+    const response = await fetch(`${API_BASE}/debt/strategies`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyBudget: budget, debts: numericDebts }) });
+    const result = await response.json(); if (!response.ok) throw new Error(result.error || "No se pudo calcular");
+    resultBox.innerHTML = `<strong>Avalancha</strong>: ${result.avalanche.months} meses · ${formatMoney(result.avalanche.interestPaid, currency, 2)} de intereses<br><strong>Bola de nieve</strong>: ${result.snowball.months} meses · ${formatMoney(result.snowball.interestPaid, currency, 2)} de intereses`;
+  } catch (error) { resultBox.textContent = error.message; }
+}
+function clearDocument(options = {}) {
+  state.source?.close?.(); state.pdf?.destroy?.(); state.source = null; state.pdf = null; state.image?.close?.(); state.image = null; state.redactions = new Map(); state.flatDocument = null; state.sourceText = ""; state.transactions = [];
+  $("#document-file").value = ""; $("#document-text").value = ""; $("#document-preview").textContent = "Sin contenido cargado. El original no se conserva."; $("#redaction-canvas").getContext("2d").clearRect(0, 0, $("#redaction-canvas").width, $("#redaction-canvas").height); $("#page-indicator").textContent = "Sin documento"; $("#prev-page").disabled = true; $("#next-page").disabled = true; $("#flatten-ocr").disabled = true; $("#undo-redaction").disabled = true; $("#consent").checked = false; $("#save-anonymized").disabled = true; renderTransactions();
+  ["financial-date", "financial-concept", "financial-amount", "financial-payment", "financial-balance", "financial-rate", "financial-minimum"].forEach((id) => { $(`#${id}`).value = ""; });
+  if (!options.keepStatus) $("#privacy-status").textContent = "Archivo y campos temporales descartados.";
 }
 
-function clearDocument() {
-  state.sourceText = "";
-  state.detected = [];
-  $("#document-file").value = "";
-  $("#document-text").value = "";
-  $("#document-preview").textContent = "Sin contenido cargado.";
-  $("#consent").checked = false;
-  $("#save-anonymized").disabled = true;
-  ["financial-date", "financial-concept", "financial-amount", "financial-payment", "financial-balance", "financial-rate"]
-    .forEach((id) => { $(`#${id}`).value = ""; });
+function bindEvents() {
+  $$("[data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
+  ["#amount", "#term", "#spread", "#extra-payment", "#extra-start-month"].forEach((selector) => $(selector)?.addEventListener("input", updateCalculator));
+  ["#rate-change-month", "#rate-change-value"].forEach((selector) => $(selector)?.addEventListener("input", updateCalculator));
+  $("#rate").addEventListener("input", () => { if (!state.applyingRate) state.activeRateCode = null; updateCalculator(); });
+  $("#extra-mode").addEventListener("change", updateCalculator); $("#rate-type").addEventListener("change", selectRateType); $("#currency").addEventListener("change", changeCurrency);
+  $("#export-csv").addEventListener("click", exportSchedule); $("#save-scenario").addEventListener("click", saveScenario); $("#clear-scenarios").addEventListener("click", () => { localStorage.removeItem("financialScenarios"); loadScenarios(); $("#scenario-status").textContent = "Escenarios locales eliminados."; });
+  $("#fx-amount").addEventListener("input", updateFxResult); $("#fx-direction").addEventListener("change", updateFxResult); $("#use-fx-rate").addEventListener("click", useFxRate);
+  $$("[data-currency-filter]").forEach((button) => button.addEventListener("click", () => { state.rateFilter = button.dataset.currencyFilter; $$("[data-currency-filter]").forEach((item) => item.classList.toggle("active", item === button)); renderRates(); }));
+  $$("[data-entry]").forEach((button) => button.addEventListener("click", () => { $$("[data-entry]").forEach((item) => item.classList.toggle("active", item === button)); $("#document-entry").hidden = button.dataset.entry !== "document"; $("#manual-entry").hidden = button.dataset.entry !== "manual"; $("#scan-actions").hidden = button.dataset.entry !== "document"; if (button.dataset.entry === "manual" && state.source) clearDocument(); }));
+  $("#document-file").addEventListener("change", (event) => { if (event.target.files[0]) readDocumentFile(event.target.files[0]); });
+  $("#redaction-canvas").addEventListener("pointerdown", beginRedaction); $("#redaction-canvas").addEventListener("pointerup", finishRedaction);
+  $("#undo-redaction").addEventListener("click", undoRedaction); $("#flatten-ocr").addEventListener("click", flattenAndExtract); $("#prev-page").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; renderDocumentPage(); } }); $("#next-page").addEventListener("click", () => { if (state.page < state.pageCount) { state.page += 1; renderDocumentPage(); } });
+  $("#scan-document").addEventListener("click", () => { extractFinancialData($("#document-text").value); $("#privacy-status").textContent = "Texto analizado localmente. Revise el resumen y las filas extraídas."; });
+  $("#clear-document").addEventListener("click", () => clearDocument()); $("#save-anonymized").addEventListener("click", saveAnonymizedSummary); $("#consent").addEventListener("change", (event) => { $("#save-anonymized").disabled = !event.target.checked; });
+  $("#add-transaction").addEventListener("click", addTransaction); $("#import-transactions").addEventListener("click", importTransactions); $("#add-debt").addEventListener("click", addCurrentDebt); $("#add-empty-debt").addEventListener("click", addEmptyDebt); $("#compare-debt-strategies").addEventListener("click", compareDebtStrategies);
+  window.addEventListener("resize", () => requestAnimationFrame(drawChart));
 }
 
-document.querySelectorAll("[data-view]").forEach((button) => {
-  button.addEventListener("click", () => switchView(button.dataset.view));
-});
-
-["#amount", "#rate", "#term", "#spread"].forEach((selector) => $(selector).addEventListener("input", updateCalculator));
-$("#rate-type").addEventListener("change", updateCalculator);
-$("#currency").addEventListener("change", updateCalculator);
-$("#export-csv").addEventListener("click", exportSchedule);
-$("#save-scenario").addEventListener("click", saveScenario);
-$("#clear-scenarios").addEventListener("click", clearScenarios);
-$("#add-rate").addEventListener("click", addRate);
-$("#scan-document").addEventListener("click", scanDocument);
-$("#clear-document").addEventListener("click", clearDocument);
-$("#save-anonymized").addEventListener("click", saveAnonymizedSummary);
-$("#consent").addEventListener("change", (event) => {
-  $("#save-anonymized").disabled = !event.target.checked;
-});
-$("#document-file").addEventListener("change", (event) => {
-  if (event.target.files[0]) readDocumentFile(event.target.files[0]);
-});
-
-window.addEventListener("resize", () => requestAnimationFrame(drawChart));
-
-$("#rate-date").value = new Date().toISOString().slice(0, 10);
-$("#cutoff-date").value = new Date().toISOString().slice(0, 10);
-loadRates();
-loadScenarios();
-updateCalculator();
+$("#cutoff-date").value = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Costa_Rica", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+bindEvents(); loadScenarios(); loadRates(); renderTransactions(); renderDebts(); updateCalculator();
