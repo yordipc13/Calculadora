@@ -10,46 +10,70 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="#calculator-view" data-view="calculator" aria-label="Finanzas claras, ir a la calculadora">
-        <span class="brand-mark" aria-hidden="true">₡</span>
-        <span class="brand-copy"><strong>Finanzas claras</strong><small>Herramientas para decidir mejor</small></span>
+      <a class="brand" href="#calculator-view" data-view="calculator" aria-label="Amortiza, ir a la calculadora">
+        <img class="brand-mark" src="informacion/imagenes/logo-amortiza.svg" alt="" width="64" height="64" />
+        <span class="brand-copy"><strong><span>Amorti</span><b>za</b></strong><small>PRÉSTAMOS · DEUDAS</small></span>
       </a>
       <nav class="tabs" aria-label="Secciones principales">
-        <button class="tab active" type="button" data-view="calculator" aria-current="page">Calculadora</button>
-        <button class="tab" type="button" data-view="privacy">Visor privado y deudas</button>
-        <button class="tab" type="button" data-view="rates">Tasas BCCR</button>
+        <div class="tabs-sections">
+          <button class="tab active" type="button" data-view="calculator" aria-current="page">Calculadora</button>
+          <button class="tab" type="button" data-view="privacy">Visor privado y deudas</button>
+          <button class="tab" type="button" data-view="rates">Tasas BCCR</button>
+        </div>
+        <div class="tabs-tools">
+        <div class="nav-menu fx-menu" id="fx-menu" data-menu>
+          <button class="tab nav-menu-trigger" type="button" data-menu-trigger aria-expanded="false" aria-controls="fx-menu-panel" aria-label="Tipo de cambio, abrir conversor">
+            <span class="menu-icon currency-exchange-icon" aria-hidden="true">₡⇄$</span>
+            <span class="menu-button-label">Tipo de cambio</span>
+          </button>
+          <div class="nav-popover" id="fx-menu-panel">
+            <section class="fx-converter panel" id="fx-converter" aria-label="Conversor de monedas">
+              <p class="fx-rate-copy" id="fx-rate-copy" aria-live="polite">Consultando el tipo de cambio del BCCR…</p>
+              <div class="fx-pair">
+                <label class="fx-amount-row"><span class="sr-only">Monto de origen</span><input id="fx-from-amount" type="number" min="0" step="0.01" value="1" inputmode="decimal" /><span class="fx-currency" id="fx-from-currency">USD</span></label>
+                <button class="fx-swap" id="fx-swap" type="button" aria-label="Intercambiar monedas" title="Intercambiar monedas">⇅</button>
+                <label class="fx-amount-row"><span class="sr-only">Monto convertido</span><input id="fx-to-amount" type="number" min="0" step="0.01" value="0" inputmode="decimal" /><span class="fx-currency" id="fx-to-currency">CRC</span></label>
+              </div>
+              <p class="fx-source-note">Tipo de cambio de referencia del BCCR. La conversión no modifica el préstamo.</p>
+            </section>
+          </div>
+        </div>
+        <div class="nav-menu scenarios-menu" id="scenarios-menu" data-menu>
+          <button class="tab nav-menu-trigger" type="button" data-menu-trigger aria-expanded="false" aria-controls="scenarios-menu-panel">Escenarios guardados</button>
+          <div class="nav-popover scenario-popover" id="scenarios-menu-panel">
+            <section class="scenario-menu-content" aria-label="Escenarios guardados">
+              <div class="panel-heading"><div><p class="eyebrow">Solo en este dispositivo</p><h2>Escenarios guardados</h2></div><button class="secondary clear-local-data" type="button">Borrar datos guardados</button></div>
+              <p class="notice">Tus escenarios y resúmenes se guardan localmente en este navegador y no se sincronizan entre dispositivos.</p>
+              <div id="scenario-list" class="scenario-list"><p class="empty-state">Aún no guardaste escenarios. Configura un préstamo y elige “Guardar escenario” para compararlo más adelante.</p></div>
+              <p class="status local-data-status" role="status" aria-live="polite"></p>
+            </section>
+          </div>
+        </div>
+        </div>
       </nav>
     </header>
 
     <main>
       <section class="view active" id="calculator-view" aria-labelledby="calculator-title">
-        <div class="page-intro">
+        <div class="page-intro calculator-intro">
           <div><p class="eyebrow">HERRAMIENTAS PARA DECIDIR</p><h1 id="calculator-title">Calcula tu préstamo</h1><p class="intro-copy">Explora cómo cambian la cuota y el costo total según el monto, la tasa y el plazo.</p></div>
-          <details class="fx-disclosure panel">
-            <summary><span><strong>Conversor de moneda</strong><small>Referencia diaria del BCCR</small></span><span class="disclosure-mark" aria-hidden="true">＋</span></summary>
-            <section class="fx-tool" aria-label="Conversor de monedas">
-              <div><h2>Conversión referencial</h2><p>Es una estimación y no modifica tu préstamo.</p></div>
-              <label class="field"><span class="field-label">Monto <span class="help-wrap"><button class="help-trigger" type="button" data-help="Monto a convertir entre colones y dólares. La conversión usa la referencia vigente del BCCR." aria-label="Ayuda: monto a convertir" aria-expanded="false">?</button></span></span><input id="fx-amount" type="number" min="0" step="0.01" value="1000" /></label>
-              <label class="field"><span class="field-label">Conversión <span class="help-wrap"><button class="help-trigger" type="button" data-help="Elija la dirección. Para dólares a colones se usa compra; para colones a dólares se usa venta." aria-label="Ayuda: dirección de conversión" aria-expanded="false">?</button></span></span><select id="fx-direction"><option value="USD_CRC">Dólares → colones (compra)</option><option value="CRC_USD">Colones → dólares (venta)</option></select></label>
-              <div class="fx-result"><div class="field-label">Resultado estimado <span class="help-wrap"><button class="help-trigger" type="button" data-help="Resultado aproximado al tipo de cambio seleccionado. Puede diferir del tipo de cambio aplicado por una entidad financiera." aria-label="Ayuda: resultado de conversión" aria-expanded="false">?</button></span></div><strong id="fx-result" aria-live="polite">Consultando referencia BCCR…</strong><button class="secondary" id="use-fx-rate" type="button">Usar este tipo de cambio</button></div>
-            </section>
-          </details>
         </div>
 
         <section class="calculator-workspace" aria-label="Simulación del préstamo">
           <section class="panel loan-inputs" aria-labelledby="loan-input-heading">
-            <div class="section-heading"><span class="step-number">1</span><div><p class="eyebrow">Primero · define las condiciones</p><h2 id="loan-input-heading">Tu préstamo</h2></div></div>
+            <div class="section-heading"><span class="step-number">1</span><div><h2 id="loan-input-heading">Tu préstamo</h2></div></div>
             <div class="loan-selectors">
               <label class="field"><span class="field-label">Moneda <span class="help-wrap"><button class="help-trigger" type="button" data-help="Moneda en la que está expresado el préstamo. Cambia el formato del monto y los rangos permitidos." aria-label="Ayuda: moneda del préstamo" aria-expanded="false">?</button></span></span><select id="currency"><option value="CRC">Colones (₡)</option><option value="USD">Dólares (US$)</option></select></label>
-              <label class="field"><span class="field-label">Tipo de tasa <span class="help-wrap"><button class="help-trigger" type="button" data-help="La tasa fija se mantiene constante. Una tasa variable usa una referencia del BCCR más el margen del banco." aria-label="Ayuda: tipo de tasa" aria-expanded="false">?</button></span></span><select id="rate-type"><option value="fixed">Fija</option><option value="tbp">TBP + spread</option><option value="ted">TED + spread</option><option value="tpm">TPM + spread</option></select></label>
+              <label class="field"><span class="field-label">Tipo de tasa <span class="help-wrap"><button class="help-trigger" type="button" data-help="La tasa fija se mantiene constante. Una tasa variable usa una referencia del BCCR más el margen del banco." aria-label="Ayuda: tipo de tasa" aria-expanded="false">?</button></span></span><select id="rate-type"><option value="fixed">Fija</option><option value="tbp">TBP + margen</option><option value="ted">TED + margen</option><option value="tpm">TPM + margen</option></select></label>
             </div>
             <div class="loan-sliders">
-              <label class="range-field"><span class="field-label"><span>Monto del préstamo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Cantidad de dinero que solicitas. La cuota se estima sobre este monto y la moneda elegida." aria-label="Ayuda: monto del préstamo" aria-expanded="false">?</button></span></span><output id="amount-output">₡3,000,000</output></span><input id="amount" type="range" min="100000" max="50000000" step="100000" value="3000000" /></label>
-              <label class="range-field"><span class="field-label"><span>Tasa anual <span class="help-wrap"><button class="help-trigger" type="button" data-help="Costo anual efectivo del crédito expresado como porcentaje. Si eliges una referencia BCCR, puedes ajustar el valor base." aria-label="Ayuda: tasa anual" aria-expanded="false">?</button></span></span><output id="rate-output">16.00%</output></span><input id="rate" type="range" min="0" max="60" step="0.01" value="16" /></label>
-              <label class="range-field" id="spread-label"><span class="field-label"><span>Margen del banco (spread) <span class="help-wrap"><button class="help-trigger" type="button" data-help="Puntos porcentuales que la entidad suma a la tasa de referencia para calcular la tasa variable." aria-label="Ayuda: margen del banco" aria-expanded="false">?</button></span></span><output id="spread-output">0.00%</output></span><input id="spread" type="range" min="0" max="20" step="0.1" value="0" /></label>
-              <label class="range-field"><span class="field-label"><span>Plazo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Tiempo para pagar el préstamo. Un plazo mayor suele reducir la cuota, pero puede aumentar los intereses totales." aria-label="Ayuda: plazo" aria-expanded="false">?</button></span></span><output id="term-output">36 meses</output></span><input id="term" type="range" min="1" max="360" step="1" value="36" /></label>
+              <label class="range-field"><span class="field-label"><span>Monto del préstamo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Cantidad de dinero que solicitas. La cuota se estima sobre este monto y la moneda elegida." aria-label="Ayuda: monto del préstamo" aria-expanded="false">?</button></span></span><span class="range-value-wrap"><input id="amount-value" class="range-value" type="number" min="0" step="1" value="3000000" aria-label="Monto del préstamo" /><span class="range-unit" id="amount-unit">CRC</span></span></span><input id="amount" type="range" min="100000" max="50000000" step="100000" value="3000000" aria-label="Monto del préstamo" /></label>
+              <label class="range-field"><span class="field-label"><span>Tasa anual <span class="help-wrap"><button class="help-trigger" type="button" data-help="Costo anual efectivo del crédito expresado como porcentaje. Si eliges una referencia BCCR, puedes ajustar el valor base." aria-label="Ayuda: tasa anual" aria-expanded="false">?</button></span></span><span class="range-value-wrap"><input id="rate-value" class="range-value" type="number" min="0" max="60" step="0.01" value="16" aria-label="Tasa anual porcentual" /><span class="range-unit">%</span></span></span><input id="rate" type="range" min="0" max="60" step="0.01" value="16" aria-label="Tasa anual" /></label>
+              <label class="range-field" id="spread-label"><span class="field-label"><span>Margen adicional <span class="help-wrap"><button class="help-trigger" type="button" data-help="Puntos porcentuales que la entidad suma a la tasa de referencia para calcular la tasa variable." aria-label="Ayuda: margen del banco" aria-expanded="false">?</button></span></span><output id="spread-output">0.00%</output></span><input id="spread" type="range" min="0" max="20" step="0.1" value="0" /></label>
+              <label class="range-field"><span class="field-label"><span>Plazo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Tiempo para pagar el préstamo. Un plazo mayor suele reducir la cuota, pero puede aumentar los intereses totales." aria-label="Ayuda: plazo" aria-expanded="false">?</button></span></span><span class="range-value-wrap"><input id="term-value" class="range-value" type="number" min="1" max="360" step="1" value="36" aria-label="Plazo en meses" /><span class="range-unit">meses</span></span></span><input id="term" type="range" min="1" max="360" step="1" value="36" aria-label="Plazo" /></label>
             </div>
-            <p id="rate-source-note" class="notice" role="status">Tasa efectiva anual editable. La proyección la mantiene constante, salvo que agregues un ajuste.</p>
+            <p id="range-keyboard-tip" class="range-keyboard-tip" role="status" hidden>También puedes escribir el número para ajustar el valor con precisión.</p>
+            <p id="rate-source-note" class="notice" role="status" hidden></p>
             <details class="advanced-settings">
               <summary><span>Ajustes adicionales</span><span>Opcional</span></summary>
               <div class="advanced-fields">
@@ -68,38 +92,30 @@
 
           <section class="preview-panel" aria-label="Resultados de la simulación">
             <section class="panel results-panel" aria-labelledby="results-heading">
-              <div class="section-heading"><span class="step-number">2</span><div><p class="eyebrow">Después · revisa el resultado</p><h2 id="results-heading">Tu estimación</h2></div></div>
+              <div class="section-heading"><span class="step-number">2</span><div><h2 id="results-heading">Tu estimación</h2></div></div>
               <article class="payment-result"><div class="field-label"><span>Cuota mensual estimada <span class="help-wrap"><button class="help-trigger" type="button" data-help="Pago mensual aproximado calculado con el monto, tasa y plazo elegidos. La oferta final puede incluir seguros, comisiones u otros cargos." aria-label="Ayuda: cuota mensual estimada" aria-expanded="false">?</button></span></span><span class="result-tag">Estimación</span></div><strong id="metric-payment" aria-live="polite">₡0</strong><p>El resultado es orientativo y no representa una oferta de crédito.</p></article>
               <p class="status" id="scenario-status" role="status" aria-live="polite"></p>
               <section class="metric-grid" aria-label="Resumen de simulación">
-                <article class="metric"><div class="field-label"><span>Monto del préstamo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Capital inicial que se financiaría." aria-label="Ayuda: monto financiado" aria-expanded="false">?</button></span></span></div><strong id="metric-principal">₡0</strong></article>
-                <article class="metric"><div class="field-label"><span>Plazo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Cantidad de meses estimada para pagar el crédito." aria-label="Ayuda: plazo estimado" aria-expanded="false">?</button></span></span></div><strong id="metric-term">0 meses</strong></article>
-                <article class="metric"><div class="field-label"><span>Tasa anual efectiva <span class="help-wrap"><button class="help-trigger" type="button" data-help="Porcentaje anual aplicado en esta simulación, incluyendo el spread si corresponde." aria-label="Ayuda: tasa efectiva" aria-expanded="false">?</button></span></span></div><strong id="metric-rate">0%</strong></article>
                 <article class="metric"><div class="field-label"><span>Intereses estimados <span class="help-wrap"><button class="help-trigger" type="button" data-help="Suma aproximada de intereses que se pagarían durante el plazo simulado." aria-label="Ayuda: intereses estimados" aria-expanded="false">?</button></span></span></div><strong id="metric-interest">₡0</strong></article>
                 <article class="metric"><div class="field-label"><span>Total estimado <span class="help-wrap"><button class="help-trigger" type="button" data-help="Suma del capital y los intereses calculados. No incluye gastos externos que no estén en los datos." aria-label="Ayuda: total estimado" aria-expanded="false">?</button></span></span></div><strong id="metric-total">₡0</strong></article>
               </section>
             </section>
 
-            <section class="panel chart-panel" aria-labelledby="balance-chart-heading">
-              <div class="panel-heading"><div><p class="eyebrow">Evolución mes a mes</p><h2 id="balance-chart-heading">Saldo e intereses</h2></div><span class="help-wrap"><button class="help-trigger" type="button" data-help="La curva muestra el saldo pendiente y los intereses acumulados de cada periodo del cronograma. Toca o pasa el cursor sobre el gráfico para ver los valores." aria-label="Ayuda: gráfico del préstamo" aria-expanded="false">?</button></span></div>
-              <div class="legend"><span class="legend-balance"></span>Saldo pendiente <span class="legend-interest"></span>Interés acumulado</div>
-              <div class="chart-wrap"><canvas id="balance-chart" role="img" aria-label="Gráfico mensual del saldo pendiente e intereses acumulados" tabindex="0"></canvas><div id="chart-tooltip" class="chart-tooltip" role="status" hidden></div></div>
-              <p id="chart-description" class="chart-description">El gráfico se basa en el cronograma mensual de esta simulación.</p>
-            </section>
           </section>
         </section>
 
+        <section class="panel chart-panel" aria-labelledby="balance-chart-heading">
+          <div class="panel-heading"><div><p class="eyebrow">Evolución mes a mes</p><h2 id="balance-chart-heading">Saldo e intereses</h2></div><span class="help-wrap"><button class="help-trigger" type="button" data-help="La curva muestra el saldo pendiente y los intereses acumulados de cada periodo del cronograma. Toca o pasa el cursor sobre el gráfico para ver los valores." aria-label="Ayuda: gráfico del préstamo" aria-expanded="false">?</button></span></div>
+          <div class="legend"><span class="legend-balance"></span>Saldo pendiente <span class="legend-interest"></span>Interés acumulado</div>
+          <div class="chart-wrap"><svg id="balance-chart" viewBox="0 0 1000 288" preserveAspectRatio="none" role="img" aria-label="Gráfico mensual del saldo pendiente e intereses acumulados" tabindex="0"></svg><div id="chart-tooltip" class="chart-tooltip" role="status" hidden></div></div>
+          <p id="chart-description" class="chart-description">El gráfico se basa en el cronograma mensual de esta simulación.</p>
+        </section>
+
         <section class="panel schedule-panel" aria-labelledby="schedule-heading">
-          <div class="panel-heading"><div><p class="eyebrow">Detalle del cálculo</p><h2 id="schedule-heading">Cronograma de pagos</h2></div><button class="secondary" id="export-csv" type="button">Exportar CSV</button></div>
+          <div class="panel-heading"><div><p class="eyebrow">Detalle del cálculo</p><h2 id="schedule-heading">Cronograma de pagos</h2></div><button class="secondary" id="export-csv" type="button">Exportar tabla</button></div>
           <div class="table-wrap"><table><thead><tr><th><span>Mes <span class="help-wrap"><button class="help-trigger" type="button" data-help="Número de cuota dentro del cronograma." aria-label="Ayuda: mes de pago" aria-expanded="false">?</button></span></span></th><th><span>Cuota <span class="help-wrap"><button class="help-trigger" type="button" data-help="Pago de ese mes, incluidos los abonos adicionales cuando corresponda." aria-label="Ayuda: cuota mensual" aria-expanded="false">?</button></span></span></th><th><span>Capital <span class="help-wrap"><button class="help-trigger" type="button" data-help="Parte del pago que reduce el monto principal adeudado." aria-label="Ayuda: capital amortizado" aria-expanded="false">?</button></span></span></th><th><span>Interés <span class="help-wrap"><button class="help-trigger" type="button" data-help="Costo del crédito generado durante ese mes según el saldo y la tasa simulada." aria-label="Ayuda: interés mensual" aria-expanded="false">?</button></span></span></th><th><span>Saldo restante <span class="help-wrap"><button class="help-trigger" type="button" data-help="Capital que aún quedaría pendiente después de aplicar el pago del mes." aria-label="Ayuda: saldo restante" aria-expanded="false">?</button></span></span></th></tr></thead><tbody id="schedule-body"></tbody></table></div>
         </section>
 
-        <section class="panel scenario-panel" aria-labelledby="scenario-heading">
-          <div class="panel-heading"><div><p class="eyebrow">Solo en este dispositivo</p><h2 id="scenario-heading">Escenarios guardados</h2></div><button class="secondary clear-local-data" type="button">Borrar datos guardados</button></div>
-          <p class="notice">Tus escenarios y resúmenes se guardan localmente en este navegador y no se sincronizan entre dispositivos.</p>
-          <div id="scenario-list" class="scenario-list"><p class="empty-state">Aún no guardaste escenarios. Configura un préstamo y elige “Guardar escenario” para compararlo más adelante.</p></div>
-          <p class="status local-data-status" role="status" aria-live="polite"></p>
-        </section>
       </section>
 
       <section class="view" id="privacy-view" aria-labelledby="privacy-title">
@@ -122,27 +138,28 @@
           </div>
 
           <div id="document-entry" class="entry-route" role="tabpanel" aria-labelledby="document-tab">
-            <div class="document-workspace">
-              <div class="document-controls">
-                <div class="file-input-heading"><strong>Documento de estado de cuenta</strong><span class="help-wrap"><button class="help-trigger" type="button" data-help="Selecciona un PDF o una imagen. El archivo se procesa únicamente en este navegador; tamaño máximo 25 MB, hasta 40 páginas y 40 megapíxeles por imagen." aria-label="Ayuda: archivo de estado de cuenta" aria-expanded="false">?</button></span></div>
-                <label class="drop-zone" id="drop-zone">
-                  <input id="document-file" type="file" accept=".pdf,image/*" aria-label="Seleccionar un PDF o imagen para procesar localmente" />
-                  <span class="upload-mark" aria-hidden="true">↑</span><strong>Selecciona o arrastra un archivo</strong><span>PDF o imagen · máximo 25 MB y 40 páginas</span>
-                </label>
-                <div class="privacy-note"><strong>Antes de extraer</strong><p>Dibuja bloques negros sobre nombre, identificación, dirección, correo, teléfono y tarjeta. El texto original bajo el bloque se elimina de la copia aplanada.</p></div>
-                <div class="redaction-controls" aria-label="Controles de página y censura">
-                  <span class="page-status"><span id="page-indicator" role="status">Sin documento</span><span class="help-wrap"><button class="help-trigger" type="button" data-help="Selecciona una página para revisar sus censuras. Cada página se procesa localmente." aria-label="Ayuda: página del documento" aria-expanded="false">?</button></span></span>
-                  <div class="action-row"><button class="secondary" id="prev-page" type="button" disabled>Página anterior</button><button class="secondary" id="next-page" type="button" disabled>Página siguiente</button></div>
-                  <button class="secondary" id="undo-redaction" type="button" disabled>Deshacer último bloque</button>
-                </div>
-              </div>
-              <div class="document-preview-panel">
-                <div class="panel-heading"><div><p class="eyebrow">Vista local</p><h3>Oculta tus datos personales</h3></div><span class="help-wrap"><button class="help-trigger" type="button" data-help="Arrastra sobre el documento para dibujar un rectángulo negro. Revisa todas las páginas antes de confirmar la censura y extraer los datos." aria-label="Ayuda: censurar el documento" aria-expanded="false">?</button></span></div>
-                <div class="redaction-stage"><canvas id="redaction-canvas" aria-label="Vista del documento para ocultar datos privados" hidden></canvas><p class="empty-state document-empty">Selecciona un PDF o imagen para ver aquí la página y cubrir la información privada.</p></div>
-                <div class="action-row document-actions"><button class="primary" id="flatten-ocr" type="button" disabled>Confirmar censura y extraer</button><button class="secondary" id="clear-document" type="button">Descartar archivo</button></div>
-              </div>
-            </div>
+            <div class="file-input-heading"><strong>Documento de estado de cuenta</strong><span class="help-wrap"><button class="help-trigger" type="button" data-help="El archivo se procesa localmente. Primero podrás cubrir los datos personales en un editor." aria-label="Ayuda: archivo de estado de cuenta" aria-expanded="false">?</button></span></div>
+            <label class="drop-zone" id="drop-zone">
+              <input id="document-file" type="file" accept=".pdf,image/*" aria-label="Seleccionar un PDF o imagen para procesar localmente" />
+              <span class="upload-mark" aria-hidden="true">↑</span><strong>Selecciona o arrastra un archivo</strong><span>PDF o imagen · máximo 25 MB y 40 páginas</span>
+            </label>
+            <button id="reopen-sanitizer" class="secondary reopen-sanitizer" type="button" hidden>Continuar con el archivo abierto</button>
+            <div class="privacy-note"><strong>El archivo permanece en tu dispositivo</strong><p>Al elegirlo, se abrirá un editor para cubrir datos personales antes de extraer la información financiera.</p></div>
           </div>
+
+          <dialog id="sanitizer-dialog" class="sanitizer-dialog" aria-labelledby="sanitizer-title">
+            <div class="sanitizer-editor">
+              <header class="sanitizer-header"><div><h2 id="sanitizer-title">Cubre tus datos personales</h2><p>Arrastra sobre el documento para dibujar bloques negros. Revisa todas las páginas antes de continuar.</p></div><button id="close-sanitizer" class="icon-button" type="button" aria-label="Cerrar editor">×</button></header>
+              <div class="sanitizer-tools">
+                <span class="page-status"><span id="page-indicator" role="status">Sin documento</span></span>
+                <div class="action-row"><button class="secondary" id="prev-page" type="button" disabled>Página anterior</button><button class="secondary" id="next-page" type="button" disabled>Página siguiente</button></div>
+                <div class="action-row zoom-controls" aria-label="Zoom del documento"><button class="secondary zoom-step" type="button" data-zoom="out" aria-label="Alejar">−</button><button class="secondary zoom-step" type="button" data-zoom="in" aria-label="Acercar">+</button><output id="zoom-level" aria-live="polite">100%</output></div>
+                <div class="action-row"><button class="secondary" id="undo-redaction" type="button" disabled>Deshacer</button><button class="secondary" id="redo-redaction" type="button" disabled>Rehacer</button></div>
+              </div>
+              <div class="redaction-stage"><div class="redaction-canvas-wrap" hidden><canvas id="redaction-canvas" aria-label="Vista del documento para ocultar datos privados"></canvas><canvas id="redaction-overlay" aria-hidden="true"></canvas></div><p class="empty-state document-empty">Selecciona un PDF o imagen para ver aquí la página y cubrir la información privada.</p></div>
+              <footer class="sanitizer-footer"><span class="privacy-inline">El archivo no se envía ni se guarda en un servidor.</span><div class="action-row document-actions"><button class="secondary" id="clear-document" type="button">Descartar archivo</button><button class="primary" id="flatten-ocr" type="button" disabled>Confirmar censura y extraer</button></div></footer>
+            </div>
+          </dialog>
 
           <div id="manual-entry" class="entry-route" role="tabpanel" aria-labelledby="manual-tab" hidden>
             <p class="route-description">Si prefieres no cargar un archivo, pega texto previamente sanitizado o ingresa los consumos en formato CSV. Podrás corregir cada dato en la siguiente etapa.</p>
@@ -194,6 +211,7 @@
           <div class="panel-heading debt-table-heading"><div><p class="eyebrow">Lista para comparar</p><h3>Deudas</h3></div><div class="action-row"><button class="secondary" id="add-debt" type="button">Agregar desde el resumen</button><button class="secondary" id="add-empty-debt" type="button">Agregar deuda manual</button></div></div>
           <p id="debts-empty" class="empty-state">Todavía no agregas deudas. Usa “Agregar desde el resumen” o crea una deuda manual para empezar.</p>
           <div class="table-wrap"><table><thead><tr><th scope="col"><span>Nombre <span class="help-wrap"><button class="help-trigger" type="button" data-help="Etiqueta local para distinguir cada deuda. Evita escribir números de cuenta o nombres completos." aria-label="Ayuda: nombre de deuda" aria-expanded="false">?</button></span></span></th><th scope="col"><span>Saldo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Cantidad que todavía debes en esta cuenta o préstamo." aria-label="Ayuda: saldo de deuda" aria-expanded="false">?</button></span></span></th><th scope="col"><span>Tasa anual <span class="help-wrap"><button class="help-trigger" type="button" data-help="Porcentaje anual de interés de esta deuda." aria-label="Ayuda: tasa de deuda" aria-expanded="false">?</button></span></span></th><th scope="col"><span>Pago mínimo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Pago mínimo requerido cada mes para esta deuda." aria-label="Ayuda: pago mínimo de deuda" aria-expanded="false">?</button></span></span></th><th scope="col"><span>Moneda <span class="help-wrap"><button class="help-trigger" type="button" data-help="Moneda del saldo, la tasa y el pago mínimo de esta fila." aria-label="Ayuda: moneda de deuda" aria-expanded="false">?</button></span></span></th><th scope="col"><span>Acción <span class="help-wrap"><button class="help-trigger" type="button" data-help="Permite quitar una deuda de esta comparación." aria-label="Ayuda: acciones de deuda" aria-expanded="false">?</button></span></span></th></tr></thead><tbody id="debts-body"></tbody></table></div>
+          <p class="notice">Avalancha: paga primero la deuda con la tasa más alta. Bola de nieve: paga primero la deuda con el saldo más pequeño.</p>
           <div class="debt-compare-row"><button class="primary" id="compare-debt-strategies" type="button">Comparar Avalancha y Bola de nieve</button><span class="help-wrap"><button class="help-trigger" type="button" data-help="Avalancha prioriza la tasa más alta; Bola de nieve prioriza el saldo más pequeño. Ambas respetan los pagos mínimos y el presupuesto indicado." aria-label="Ayuda: estrategias de pago" aria-expanded="false">?</button></span></div>
           <div id="debt-strategy-result" class="debt-results status" role="status" aria-live="polite"><p class="empty-state">Elige un presupuesto y agrega deudas para ver los meses estimados y los intereses de cada estrategia.</p></div>
         </section>

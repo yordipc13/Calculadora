@@ -23,6 +23,12 @@ Wrangler solicita el valor de cada secreto en la terminal. No los guardes en HTM
 
 El cron de Wrangler está a las 00:30 UTC, que corresponde a las 18:30 de Costa Rica. El Worker consulta los indicadores 423 (TBP), 23698 (TED), 317 (compra), 318 (venta) y 3541 (TPM). Si el BCCR no responde o el dato no cambia, conserva el último valor válido y actualiza el estado de consulta sin insertar un valor duplicado.
 
+### Operación comprobada y límite pendiente del token
+
+Configuración técnica comprobada: una ejecución diaria consulta como máximo cinco indicadores con timeout de 15 segundos; las consultas manuales usan la ruta protegida `/api/bccr/refresh`. El cron ya ha actualizado los cinco indicadores con estado `ok` y los datos siguen disponibles en el endpoint público.
+
+No se encontró una cuota numérica publicada del token BCCR en el portal público ni una política de límite visible en las respuestas HTTP. Por ello no debe asumirse una cantidad máxima de solicitudes por minuto, por día o por token. Solicitar al BCCR por el Centro de Atención oficial (`https://atencion.bccr.fi.cr/csm?id=bccr_aic_contactenos`) o al teléfono `+506 2243-3333` la vigencia del token, el número de solicitudes permitidas, la ventana de medición, las respuestas ante exceso de cuota y las condiciones de uso de los datos.
+
 ## 2.1 CORS y límites de solicitudes
 
 En desarrollo se permiten los orígenes `http://localhost:5500` y `http://127.0.0.1:5500` si no se define `CORS_ALLOWED_ORIGINS`. Antes de desplegar producción, configura esa variable en Cloudflare con el origen exacto del sitio público; acepta varios orígenes separados por comas. No uses `*`. CORS solo limita qué páginas pueden leer respuestas en el navegador; no sustituye autenticación ni rate limiting.

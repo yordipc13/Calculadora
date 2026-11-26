@@ -9,7 +9,7 @@ const LOCAL_DATA_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const LOCAL_FINANCIAL_KEYS = ["financialScenarios", "anonymizedDebtSummaries"];
 const state = {
   schedule: [], rates: [], rateFilter: "ALL", ratesError: null, source: null, pdf: null, image: null,
-  page: 1, pageCount: 1, redactions: new Map(), pointerStart: null, flatDocument: null,
+  page: 1, pageCount: 1, redactions: new Map(), redoRedactions: new Map(), pointerStart: null, documentZoom: 1, flatDocument: null,
   transactions: [], debts: [], calculationSequence: 0, activeRateCode: null, applyingRate: false,
   extractionIssues: [], extractionMissing: [], rejectedTransactions: 0,
   chartPoints: [], chartPlot: null, selectedChartPoint: null,
@@ -103,13 +103,17 @@ function calculateSchedule(principal, annualRate, months) {
     totalInterest += interest;
     schedule.push({ month, payment: planned + extraCapital, capital: capital + extraCapital, extraCapital, interest, balance });
   }
-  return { schedule, payment: regularPayment, totalInterest, totalPaid: principal + totalInterest };
+  return { schedule, payment: regularPayment, regularPayment, totalInterest, totalPaid: principal + totalInterest };
 }
 
 function updateCalculator() {
   const principalInput = $("#amount"); const currency = $("#currency").value;
-  if (currency === "USD") { principalInput.min = "1000"; principalInput.max = "300000"; principalInput.step = "1000"; $("#term").max = "240"; }
-  else { principalInput.min = "300000"; principalInput.max = "50000000"; principalInput.step = "100000"; $("#term").max = "360"; }
+  const amount = Number(principalInput.value) || 0;
+  if (currency === "USD") {
+    principalInput.min = String(Math.min(1000, amount || 1000)); principalInput.max = String(Math.max(300000, Math.ceil(amount / 1000) * 1000)); principalInput.step = "0.01"; $("#term").max = "240";
+  } else {
+    principalInput.min = String(Math.min(300000, amount || 300000)); principalInput.max = String(Math.max(50000000, Math.ceil(amount / 100) * 100)); principalInput.step = "100"; $("#term").max = "360";
+  }
   if (Number($("#term").value) > Number($("#term").max)) $("#term").value = $("#term").max;
   $("#extra-start-month").max = $("#term").value;
   if (Number($("#extra-start-month").value) > Number($("#term").value)) $("#extra-start-month").value = $("#term").value;
@@ -122,22 +126,24 @@ function updateCalculator() {
   const months = Number($("#term").value); const rateType = $("#rate-type").value;
   const baseRate = Number($("#rate").value); const spread = rateType === "fixed" ? 0 : Number($("#spread").value);
   const annualRate = baseRate + spread;
-  $("#amount-output").textContent = formatMoney(principal);
-  $("#rate-output").textContent = `${baseRate.toFixed(2)}%`;
-  $("#spread-output").textContent = `${spread.toFixed(2)}%`;
-  $("#term-output").textContent = `${months} meses`;
-  $("#spread-label").classList.toggle("rate-spread-muted", rateType === "fixed");
+  if ($("#amount-output")) $("#amount-output").textContent = formatMoney(principal, currency, currency === "USD" ? 2 : 0);
+  if ($("#rate-output")) $("#rate-output").textContent = `${baseRate.toFixed(2)}%`;
+  if ($("#spread-output")) $("#spread-output").textContent = `${spread.toFixed(2)}%`;
+  if ($("#term-output")) $("#term-output").textContent = `${months} meses`;
+  if ($("#amount-value")) $("#amount-value").value = String(principal);
+  if ($("#rate-value")) $("#rate-value").value = String(baseRate);
+  if ($("#term-value")) $("#term-value").value = String(months);
+  $("#spread-label").hidden = rateType === "fixed";
   $("#spread").disabled = rateType === "fixed";
   const result = calculateSchedule(principal, annualRate, months); state.schedule = result.schedule;
-  $("#metric-principal").textContent = formatMoney(principal);
-  $("#metric-term").textContent = `${months} meses`;
-  $("#metric-rate").textContent = `${annualRate.toFixed(2)}%`;
+  state.selectedChartPoint = null;
+  $("#chart-tooltip").hidden = true;
   $("#metric-payment").textContent = formatMoney(result.schedule[0]?.payment || 0);
   $("#metric-interest").textContent = formatMoney(result.totalInterest);
   $("#metric-total").textContent = formatMoney(result.totalPaid);
   const officialRate = state.activeRateCode && rateByCode(state.activeRateCode);
   $("#rate-source-note").textContent = officialRate
-    ? `${officialRate.short_name} BCCR: ${Number(officialRate.value).toFixed(2)}% anual efectiva · dato del ${officialRate.reference_date}. Puedes editar la tasa y el spread.`
+    ? `${officialRate.short_name} BCCR: ${Number(officialRate.value).toFixed(2)}% anual efectiva · dato del ${officialRate.reference_date}. Puedes editar la tasa y el margen adicional.`
     : "Tasa anual efectiva editable. La proyección supone que se mantiene constante, salvo el ajuste indicado.";
   calculateWithWorker(principal, annualRate, months);
   renderSchedule(); drawChart(); updateFxResult();
@@ -156,7 +162,7 @@ async function calculateWithWorker(principal, annualRate, months) {
     const response = await fetch(`${API_BASE}/loans/calculate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ principal, annualRate, months, extraPayment, extraMode: $("#extra-mode").value, extraStartMonth: Number($("#extra-start-month").value || 1), rateChanges }) });
     const result = await response.json(); if (!response.ok) throw new Error(result.error || "No se pudo calcular");
     if (sequence !== state.calculationSequence) return;
-    state.schedule = result.schedule; renderSchedule(); drawChart();
+    state.schedule = result.schedule; state.selectedChartPoint = null; $("#chart-tooltip").hidden = true; renderSchedule(); drawChart();
     $("#metric-payment").textContent = formatMoney(result.regularPayment);
     $("#metric-interest").textContent = formatMoney(result.totalInterest);
     $("#metric-total").textContent = formatMoney(result.totalPaid);
@@ -164,18 +170,20 @@ async function calculateWithWorker(principal, annualRate, months) {
 }
 function buildChartPoints() {
   const principal = Number($("#amount").value) || 0;
+  const months = Number($("#term").value) || 0;
+  const scheduleByMonth = new Map(state.schedule.map((row) => [Number(row.month), row]));
   let accumulatedInterest = 0;
-  return [
-    { month: 0, balance: principal, capitalPaid: 0, accumulatedInterest: 0, payment: 0 },
-    ...state.schedule.map((row) => {
+  let balance = principal;
+  const points = [{ month: 0, balance, capitalPaid: 0, accumulatedInterest: 0, payment: 0 }];
+  for (let month = 1; month <= months; month += 1) {
+    const row = scheduleByMonth.get(month);
+    if (row) {
+      balance = Number(row.balance) || 0;
       accumulatedInterest += Number(row.interest) || 0;
-      return {
-        month: Number(row.month), balance: Number(row.balance) || 0,
-        capitalPaid: principal - (Number(row.balance) || 0),
-        accumulatedInterest, payment: Number(row.payment) || 0,
-      };
-    }),
-  ];
+    } else if (balance <= 0.01) balance = 0;
+    points.push({ month, balance, capitalPaid: principal - balance, accumulatedInterest, payment: Number(row?.payment) || 0 });
+  }
+  return points;
 }
 
 function chartY(value, maxValue, plot) {
@@ -183,65 +191,39 @@ function chartY(value, maxValue, plot) {
 }
 
 function drawChart() {
-  const canvas = $("#balance-chart");
-  if (!canvas) return;
-  const rect = canvas.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;
-  const scale = window.devicePixelRatio || 1;
-  canvas.width = Math.round(rect.width * scale);
-  canvas.height = Math.round(rect.height * scale);
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  ctx.clearRect(0, 0, rect.width, rect.height);
+  const chart = $("#balance-chart");
+  if (!chart) return;
   state.chartPoints = buildChartPoints();
-  const pad = { left: 96, right: 16, top: 16, bottom: 40 };
-  const plot = { left: pad.left, top: pad.top, width: rect.width - pad.left - pad.right, height: rect.height - pad.top - pad.bottom };
-  if (!state.chartPoints.length || plot.width <= 0 || plot.height <= 0) return;
+  const viewWidth = 1000; const viewHeight = 288;
+  const plot = { left: 88, top: 18, width: 896, height: 210 };
+  if (!state.chartPoints.length) return;
   const maxValue = Math.max(1, ...state.chartPoints.map((point) => Math.max(point.balance, point.accumulatedInterest)));
-  state.chartPlot = { ...plot, maxValue, width: rect.width, height: rect.height };
-  const xForIndex = (index) => plot.left + plot.width * index / Math.max(1, state.chartPoints.length - 1);
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "#E2E6E3";
-  ctx.fillStyle = "#5A655F";
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "right";
+  const termMonths = Math.max(1, Number($("#term").value) || 1);
+  const xForMonth = (month) => plot.left + plot.width * month / termMonths;
+  state.chartPlot = { ...plot, maxValue, viewWidth, viewHeight };
+
+  const grid = [];
   for (let tick = 0; tick <= 4; tick += 1) {
     const value = maxValue * (4 - tick) / 4;
     const y = plot.top + plot.height * tick / 4;
-    ctx.beginPath(); ctx.moveTo(plot.left, y); ctx.lineTo(plot.left + plot.width, y); ctx.stroke();
-    ctx.fillText(formatMoney(value, $("#currency").value), plot.left - 8, y);
+    grid.push(`<line class="chart-grid-line" x1="${plot.left}" y1="${y}" x2="${plot.left + plot.width}" y2="${y}"/><text class="chart-axis-label" x="${plot.left - 10}" y="${y}" text-anchor="end" dominant-baseline="middle">${formatMoney(value, $("#currency").value)}</text>`);
   }
-  const drawSeries = (key, color) => {
-    ctx.beginPath();
-    state.chartPoints.forEach((point, index) => {
-      const x = xForIndex(index); const y = chartY(point[key], maxValue, plot);
-      if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
-  };
-  drawSeries("balance", "#0F3D2E");
-  drawSeries("accumulatedInterest", "#2B6CB0");
-  ctx.fillStyle = "#5A655F"; ctx.textBaseline = "top";
-  const lastMonth = state.chartPoints.at(-1)?.month || 0;
-  const ticks = [...new Set([0, Math.round(lastMonth / 4), Math.round(lastMonth / 2), Math.round(lastMonth * 3 / 4), lastMonth])];
-  ticks.forEach((month) => {
-    const index = state.chartPoints.findIndex((point) => point.month === month);
-    const x = xForIndex(Math.max(0, index));
-    ctx.textAlign = month === 0 ? "left" : month === lastMonth ? "right" : "center";
-    ctx.fillText(month === 0 ? "Inicio" : `Mes ${month}`, x, plot.top + plot.height + 12);
-  });
-  if (state.selectedChartPoint !== null) drawChartFocus(state.selectedChartPoint);
+  const pathFor = (key) => state.chartPoints.map((point, index) => `${index ? "L" : "M"}${xForMonth(point.month).toFixed(2)},${chartY(point[key], maxValue, plot).toFixed(2)}`).join(" ");
+  const ticks = [...new Set([0, Math.round(termMonths / 4), Math.round(termMonths / 2), Math.round(termMonths * 3 / 4), termMonths])];
+  const labels = ticks.map((month) => `<text class="chart-axis-label" x="${xForMonth(month)}" y="${plot.top + plot.height + 14}" text-anchor="${month === 0 ? "start" : month === termMonths ? "end" : "middle"}">${month === 0 ? "Inicio" : `Mes ${month}`}</text>`).join("");
+  const selected = state.selectedChartPoint === null ? null : state.chartPoints[state.selectedChartPoint];
+  const focusLine = selected ? `<line class="chart-focus-line" x1="${xForMonth(selected.month)}" y1="${plot.top}" x2="${xForMonth(selected.month)}" y2="${plot.top + plot.height}"/>` : "";
+  chart.innerHTML = `${grid.join("")}${labels}<path class="chart-series-balance" d="${pathFor("balance")}"/><path class="chart-series-interest" d="${pathFor("accumulatedInterest")}"/>${focusLine}`;
+  if (selected) drawChartFocus(state.selectedChartPoint);
 }
 
 function drawChartFocus(index) {
-  const canvas = $("#balance-chart"); const plot = state.chartPlot; const point = state.chartPoints[index];
-  if (!canvas || !plot || !point) return;
-  const ctx = canvas.getContext("2d"); const scale = window.devicePixelRatio || 1;
-  const x = plot.left + plot.width * index / Math.max(1, state.chartPoints.length - 1);
-  ctx.save(); ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  ctx.strokeStyle = "#5A655F"; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(x, plot.top); ctx.lineTo(x, plot.top + plot.height); ctx.stroke(); ctx.restore();
-  showChartTooltip(index, x, plot.top + 8);
+  const chart = $("#balance-chart"); const plot = state.chartPlot; const point = state.chartPoints[index];
+  if (!chart || !plot || !point) return;
+  const rect = chart.getBoundingClientRect();
+  const x = (plot.left + plot.width * point.month / Math.max(1, Number($("#term").value) || 1)) / plot.viewWidth * rect.width;
+  const y = plot.top / plot.viewHeight * rect.height;
+  showChartTooltip(index, x, y);
 }
 
 function showChartTooltip(index, x, y) {
@@ -258,12 +240,14 @@ function showChartTooltip(index, x, y) {
 }
 
 function selectChartPointFromPointer(event) {
-  const canvas = $("#balance-chart"); const plot = state.chartPlot;
-  if (!canvas || !plot || !state.chartPoints.length) return;
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const ratio = Math.max(0, Math.min(1, (x - plot.left) / plot.width));
-  state.selectedChartPoint = Math.round(ratio * (state.chartPoints.length - 1));
+  const chart = $("#balance-chart"); const plot = state.chartPlot;
+  if (!chart || !plot || !state.chartPoints.length) return;
+  const rect = chart.getBoundingClientRect();
+  const viewX = (event.clientX - rect.left) / rect.width * plot.viewWidth;
+  const ratio = Math.max(0, Math.min(1, (viewX - plot.left) / plot.width));
+  const month = Math.round(ratio * (Number($("#term").value) || 0));
+  state.selectedChartPoint = state.chartPoints.findIndex((point) => point.month === month);
+  if (state.selectedChartPoint < 0) return;
   drawChart();
 }
 
@@ -386,14 +370,38 @@ function switchView(name) {
     tab.classList.toggle("active", selected);
     if (selected) tab.setAttribute("aria-current", "page"); else tab.removeAttribute("aria-current");
   });
+  $$('[data-menu]').forEach((menu) => {
+    menu.classList.remove('open');
+    menu.querySelector('[data-menu-trigger]')?.setAttribute('aria-expanded', 'false');
+  });
   if (name === "calculator") requestAnimationFrame(drawChart);
   if (name === "rates") loadRates();
 }
 function exportSchedule() {
   if (!state.schedule.length) return;
-  const rows = [["Mes", "Cuota", "Capital", "Interes", "Saldo"], ...state.schedule.map((row) => [row.month, row.payment.toFixed(2), row.capital.toFixed(2), row.interest.toFixed(2), row.balance.toFixed(2)])];
-  const blob = new Blob([rows.map((row) => row.join(",")).join("\n")], { type: "text/csv;charset=utf-8" });
-  const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "plan-amortizacion.csv" }); link.click(); URL.revokeObjectURL(link.href);
+  const formatExcelNumber = (value) => Number(value).toFixed(2).replace(".", ",");
+  const escapeCsv = (value) => `"${String(value).replaceAll('"', '""')}"`;
+  const rows = [
+    ["Mes", "Cuota", "Capital", "Abono adicional", "Interés", "Saldo restante"],
+    ...state.schedule.map((row) => [
+      row.month,
+      formatExcelNumber(row.payment),
+      formatExcelNumber(row.capital),
+      formatExcelNumber(row.extraCapital || 0),
+      formatExcelNumber(row.interest),
+      formatExcelNumber(row.balance),
+    ]),
+  ];
+  const csv = "\ufeff" + rows.map((row) => row.map(escapeCsv).join(";")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const link = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(blob),
+    download: "plan-amortizacion.csv",
+  });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
 }
 function saveScenario() {
   const principal = Number($("#amount").value); const annualRate = Number($("#rate").value); const months = Number($("#term").value); const cutoffDate = $("#cutoff-date").value;
@@ -439,7 +447,7 @@ function loadScenarios() {
   container.innerHTML = scenarios.length ? scenarios.slice().reverse().map((s) => {
     const savedRate = s.rateSnapshot?.source === "BCCR SDDE" && s.rateSnapshot.referenceDate
       ? `${escapeHtml(s.rateSnapshot.benchmark || "BCCR")} ${Number(s.rateSnapshot.referenceValue).toFixed(2)}% del ${escapeHtml(s.rateSnapshot.referenceDate)}`
-      : `${s.rateType === "fixed" ? "Tasa fija" : "Base manual"} ${Number(s.annualRate || 0).toFixed(2)}%${s.spread ? ` + ${Number(s.spread).toFixed(2)}% spread` : ""}`;
+      : `${s.rateType === "fixed" ? "Tasa fija" : "Base manual"} ${Number(s.annualRate || 0).toFixed(2)}%${s.spread ? ` + ${Number(s.spread).toFixed(2)}% margen adicional` : ""}`;
     return `<article class="scenario-item" data-scenario-id="${escapeHtml(s.id)}"><div class="scenario-summary"><strong>${escapeHtml(s.currency)} · ${formatMoney(s.principal, s.currency)}</strong><span>${Number(s.snapshot?.effectiveRate ?? (Number(s.annualRate || 0) + Number(s.spread || 0))).toFixed(2)}% anual · ${s.months} meses <span class="help-wrap"><button class="help-trigger" type="button" data-help="Resumen de las condiciones con las que se guardó este escenario: moneda, monto, tasa efectiva y plazo." aria-label="Ayuda: escenario guardado" aria-expanded="false">?</button></span></span><span>${savedRate} · corte ${escapeHtml(s.cutoffDate || "sin fecha")}</span></div><div class="scenario-actions"><label class="field"><span class="field-label">Fecha de recálculo <span class="help-wrap"><button class="help-trigger" type="button" data-help="Elige la fecha cuyos datos de tasa se usarán para recalcular el escenario." aria-label="Ayuda: fecha de recálculo" aria-expanded="false">?</button></span></span><input type="date" data-scenario-date value="${escapeHtml(s.cutoffDate || "")}" max="${today}" /></label><button class="secondary recalculate-scenario" data-id="${escapeHtml(s.id)}" type="button">Recalcular</button><button class="secondary restore-scenario" data-id="${escapeHtml(s.id)}" type="button">Restaurar</button></div>${scenarioComparisonMarkup(s)}<p class="scenario-status" role="status"></p></article>`;
   }).join("") : '<p class="status">No hay escenarios guardados.</p>';
   $$(".restore-scenario", container).forEach((button) => button.addEventListener("click", () => restoreScenario(button.dataset.id)));
@@ -463,9 +471,9 @@ function recalculateScenario(id, button) {
       rateChanges: rateChangeMonth >= 2 ? [{ month: rateChangeMonth, annualRate: Number(assumptions.rateChangeValue) }] : [],
     });
     const rateDescription = rate.source === "BCCR SDDE"
-      ? `${rate.benchmark} ${rate.baseRate.toFixed(2)}% + ${rate.spread.toFixed(2)}% spread = ${rate.annualRate.toFixed(2)}% anual · dato BCCR ${rate.referenceDate}`
+      ? `${rate.benchmark} ${rate.baseRate.toFixed(2)}% + ${rate.spread.toFixed(2)}% margen adicional = ${rate.annualRate.toFixed(2)}% anual · dato BCCR ${rate.referenceDate}`
       : rate.source === "Manual"
-        ? `Tasa base manual ${rate.baseRate.toFixed(2)}% + ${rate.spread.toFixed(2)}% spread = ${rate.annualRate.toFixed(2)}% anual`
+        ? `Tasa base manual ${rate.baseRate.toFixed(2)}% + ${rate.spread.toFixed(2)}% margen adicional = ${rate.annualRate.toFixed(2)}% anual`
         : `Tasa fija guardada ${rate.annualRate.toFixed(2)}% anual`;
     scenario.recalculations = [...(scenario.recalculations || []), {
       cutoffDate, createdAt: new Date().toISOString(), rate: { ...rate }, rateDescription,
@@ -606,7 +614,8 @@ function renderRateCard(rate) {
   const current = Number(rate.value);
   const change = rateVariation(rate);
   const explanation = rate.description || "Indicador financiero oficial publicado por el BCCR.";
-  return `<article class="rate-card" data-rate-card="${escapeHtml(rate.code)}"><div class="rate-card-head"><span class="rate-code">${escapeHtml(rate.short_name || rate.name)}</span><span class="rate-currency">${escapeHtml(rateCurrencyLabel(rate))}</span></div><h2>${escapeHtml(rate.name)} <span class="help-wrap"><button class="help-trigger" type="button" data-help="${escapeHtml(`${rate.name} (${rate.short_name || rate.code}) es un indicador oficial del BCCR. ${explanation}`)}" aria-label="Ayuda: ${escapeHtml(rate.short_name || rate.name)}" aria-expanded="false">?</button></span></h2><div class="rate-value-row"><div class="rate-value-line"><strong class="rate-value">${escapeHtml(rateValueLabel(rate, current))}</strong><span class="help-wrap"><button class="help-trigger" type="button" data-help="Valor vigente publicado por el BCCR para este indicador. La unidad y moneda aparecen en la tarjeta." aria-label="Ayuda: valor vigente" aria-expanded="false">?</button></span></div><p class="rate-change ${change.direction}"><span>${escapeHtml(change.text)}</span> <span class="help-wrap"><button class="help-trigger" type="button" data-help="Variación frente al valor anterior diferente que está guardado. Los valores repetidos no generan filas duplicadas." aria-label="Ayuda: variación reciente" aria-expanded="false">?</button></span></p></div><dl class="rate-meta"><div><dt>Fecha oficial <span class="help-wrap"><button class="help-trigger" type="button" data-help="Día al que corresponde el valor publicado por el BCCR." aria-label="Ayuda: fecha oficial del dato" aria-expanded="false">?</button></span></dt><dd>${escapeHtml(formatBccrDate(rate.reference_date))}</dd></div><div><dt>Última verificación <span class="help-wrap"><button class="help-trigger" type="button" data-help="Momento en que el Worker consultó el servicio del BCCR por última vez." aria-label="Ayuda: última verificación" aria-expanded="false">?</button></span></dt><dd>${escapeHtml(rate.last_verification ? formatBccrDate(rate.last_verification, true) : "Sin verificación")}</dd></div></dl><p class="rate-description">${escapeHtml(explanation)}</p><div class="rate-card-actions"><button class="primary use-rate" data-code="${escapeHtml(rate.code)}" type="button">${rate.unit === "percent" ? "Usar en calculadora" : "Usar tipo de cambio"}</button><button class="secondary toggle-trend" type="button" aria-expanded="false">Ver tendencia</button></div><div class="trend-content" hidden>${rateTrendMarkup(rate, 30)}</div></article>`;
+  const datesHelp = `Fecha oficial del dato: ${formatBccrDate(rate.reference_date)}. Última verificación del sistema: ${rate.last_verification ? formatBccrDate(rate.last_verification, true) : "sin verificación registrada"}.`;
+  return `<article class="rate-card" data-rate-card="${escapeHtml(rate.code)}"><div class="rate-card-main"><div class="rate-card-title"><span class="rate-code">${escapeHtml(rate.short_name || rate.name)}</span><h2>${escapeHtml(rate.name)}</h2><span class="help-wrap"><button class="help-trigger" type="button" data-help="${escapeHtml(datesHelp)}" aria-label="Ver fecha oficial y última verificación de ${escapeHtml(rate.short_name || rate.name)}" aria-expanded="false">?</button></span></div><p class="rate-card-detail"><span class="rate-currency">${escapeHtml(rateCurrencyLabel(rate))}</span><span aria-hidden="true"> · </span><span>${escapeHtml(explanation)}</span><span aria-hidden="true"> · </span><span class="rate-change ${change.direction}">${escapeHtml(change.text)}</span></p></div><div class="rate-card-side"><strong class="rate-value">${escapeHtml(rateValueLabel(rate, current))}</strong><div class="rate-card-actions"><button class="primary use-rate" data-code="${escapeHtml(rate.code)}" type="button">${rate.unit === "percent" ? "Usar en calculadora" : "Usar tipo de cambio"}</button><button class="secondary toggle-trend" type="button" aria-expanded="false">Ver tendencia</button></div></div><div class="trend-content" hidden>${rateTrendMarkup(rate, 30)}</div></article>`;
 }
 function renderRates() {
   const grid = $("#rates-grid");
@@ -671,9 +680,10 @@ function useRate(code) {
     updateCalculator();
     $("#spread").focus();
   } else {
-    $(".fx-disclosure").open = true;
-    $("#fx-direction").value = String(code) === "317" ? "USD_CRC" : "CRC_USD";
-    updateFxResult(); $(".fx-disclosure").scrollIntoView({ behavior: "smooth", block: "center" }); $("#fx-amount").focus();
+    $("#fx-from-currency").textContent = String(code) === "317" ? "USD" : "CRC";
+    $("#fx-to-currency").textContent = String(code) === "317" ? "CRC" : "USD";
+    $("#fx-from-amount").value = "1";
+    updateFxResult(); $("#fx-converter").scrollIntoView({ behavior: "smooth", block: "center" }); $("#fx-from-amount").focus();
     $("#scenario-status").textContent = `Tipo de cambio ${rate.short_name} cargado en el conversor.`;
   }
 }
@@ -691,34 +701,82 @@ function changeCurrency() {
   updateCalculator();
 }
 function updateFxResult() {
-  const amount = Number($("#fx-amount")?.value || 0); const direction = $("#fx-direction")?.value || "USD_CRC";
-  const code = direction === "USD_CRC" ? "317" : "318"; const rate = rateByCode(code);
-  $("#fx-result").textContent = rate ? formatMoney(direction === "USD_CRC" ? amount * Number(rate.value) : amount / Number(rate.value), direction === "USD_CRC" ? "CRC" : "USD", 2) : "Tasas BCCR pendientes";
+  const sourceCurrency = $("#fx-from-currency")?.textContent || "USD";
+  const targetCurrency = $("#fx-to-currency")?.textContent || "CRC";
+  const source = $("#fx-from-amount"); const target = $("#fx-to-amount"); const rateCopy = $("#fx-rate-copy");
+  if (!source || !target || !rateCopy) return;
+  const rateCode = sourceCurrency === targetCurrency ? null : sourceCurrency === "USD" ? "317" : "318";
+  const rate = rateCode && rateByCode(rateCode); const exchangeRate = sourceCurrency === targetCurrency ? 1 : Number(rate?.value);
+  const fromValue = Math.max(0, Number(source.value) || 0);
+  const converted = sourceCurrency === "USD" && targetCurrency === "CRC" ? fromValue * exchangeRate
+    : sourceCurrency === "CRC" && targetCurrency === "USD" ? fromValue / exchangeRate : fromValue;
+  target.value = Number.isFinite(converted) ? converted.toFixed(2) : "";
+  if (!rate) { rateCopy.textContent = sourceCurrency === targetCurrency ? "Elige dos monedas distintas para convertir." : "Consultando el tipo de cambio del BCCR…"; return; }
+  const oneUnit = sourceCurrency === "USD" ? Number(rate.value) : 1 / Number(rate.value);
+  const unitName = { USD: "dólar estadounidense", CRC: "colón costarricense" };
+  const targetLabel = targetCurrency === "CRC" ? "colones costarricenses" : "dólares estadounidenses";
+  rateCopy.textContent = `1 ${unitName[sourceCurrency]} equivale a ${new Intl.NumberFormat("es-CR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(oneUnit)} ${targetLabel}`;
+}
+function updateFxFromTarget() {
+  const sourceCurrency = $("#fx-from-currency").textContent; const targetCurrency = $("#fx-to-currency").textContent;
+  const source = $("#fx-from-amount"); const target = $("#fx-to-amount");
+  const exchangeRate = sourceCurrency === targetCurrency ? 1 : Number(rateByCode(sourceCurrency === "USD" ? "317" : "318")?.value);
+  const targetValue = Math.max(0, Number(target.value) || 0);
+  const sourceValue = sourceCurrency === "USD" && targetCurrency === "CRC" ? targetValue / exchangeRate
+    : sourceCurrency === "CRC" && targetCurrency === "USD" ? targetValue * exchangeRate : targetValue;
+  source.value = Number.isFinite(sourceValue) ? sourceValue.toFixed(2) : "";
+  updateFxResult();
+}
+function swapFxCurrencies() {
+  const fromCurrency = $("#fx-from-currency"); const toCurrency = $("#fx-to-currency");
+  const fromAmount = $("#fx-from-amount"); const toAmount = $("#fx-to-amount");
+  const currentAmount = fromAmount.value;
+  fromAmount.value = toAmount.value;
+  toAmount.value = currentAmount;
+  [fromCurrency.textContent, toCurrency.textContent] = [toCurrency.textContent, fromCurrency.textContent];
+  updateFxResult();
 }
 function useFxRate() { const code = $("#fx-direction").value === "USD_CRC" ? "317" : "318"; const rate = rateByCode(code); if (!rate) return; $("#fx-amount").value = String(Number($("#amount").value) || 0); updateFxResult(); $("#scenario-status").textContent = `Conversión referencial lista con tipo de cambio ${rate.short_name}. No modifica el préstamo.`; }
 
 function drawRedactions() {
-  const canvas = $("#redaction-canvas"); const rects = state.redactions.get(state.page) || [];
-  const ctx = canvas.getContext("2d"); rects.forEach((r) => { ctx.fillStyle = "#000"; ctx.fillRect(r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height); });
+  const canvas = $("#redaction-overlay"); const rects = state.redactions.get(state.page) || [];
+  const ctx = canvas.getContext("2d"); ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000";
+  rects.forEach((r) => ctx.fillRect(r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height));
+  if (state.pointerStart && state.pointerCurrent) {
+    const left = Math.min(state.pointerStart.x, state.pointerCurrent.x); const top = Math.min(state.pointerStart.y, state.pointerCurrent.y);
+    ctx.fillRect(left * canvas.width, top * canvas.height, Math.abs(state.pointerCurrent.x - state.pointerStart.x) * canvas.width, Math.abs(state.pointerCurrent.y - state.pointerStart.y) * canvas.height);
+  }
+  $("#undo-redaction").disabled = !(state.redactions.get(state.page) || []).length;
+  $("#redo-redaction").disabled = !(state.redoRedactions.get(state.page) || []).length;
 }
 async function renderDocumentPage() {
-  const canvas = $("#redaction-canvas"); const ctx = canvas.getContext("2d");
-  canvas.hidden = false;
+  const canvas = $("#redaction-canvas"); const overlay = $("#redaction-overlay"); const ctx = canvas.getContext("2d");
+  $(".redaction-canvas-wrap").hidden = false;
   if (state.pdf) {
-    const page = await state.pdf.getPage(state.page); const viewport = page.getViewport({ scale: Math.min(1.6, 1100 / page.getViewport({ scale: 1 }).width) });
+    const page = await state.pdf.getPage(state.page); const baseWidth = page.getViewport({ scale: 1 }).width;
+    const fitScale = Math.max(.1, ($(".redaction-stage").clientWidth - 32) / baseWidth);
+    const viewport = page.getViewport({ scale: fitScale * state.documentZoom });
     canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height); await page.render({ canvasContext: ctx, viewport }).promise;
   } else if (state.image) {
-    const image = state.image; const scale = Math.min(1, 1200 / image.width); canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale); ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const image = state.image; const fitScale = Math.min(1, 2000 / image.width); canvas.width = Math.round(image.width * fitScale); canvas.height = Math.round(image.height * fitScale); ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const cssScale = Math.max(.1, ($(".redaction-stage").clientWidth - 32) / canvas.width) * state.documentZoom;
+    canvas.style.width = `${Math.round(canvas.width * cssScale)}px`;
+    canvas.style.height = `${Math.round(canvas.height * cssScale)}px`;
   }
+  overlay.width = canvas.width; overlay.height = canvas.height; overlay.hidden = false;
+  if (state.pdf) { canvas.style.width = `${canvas.width}px`; canvas.style.height = `${canvas.height}px`; }
+  overlay.style.width = canvas.style.width; overlay.style.height = canvas.style.height;
+  $("#zoom-level").value = `${Math.round(state.documentZoom * 100)}%`;
+  $("#zoom-level").textContent = `${Math.round(state.documentZoom * 100)}%`;
   drawRedactions();
   $(".document-empty").hidden = Boolean(state.pdf || state.image);
   $("#page-indicator").textContent = state.pdf ? `Página ${state.page} de ${state.pageCount}` : "Imagen · página 1 de 1";
   $("#prev-page").disabled = state.page <= 1; $("#next-page").disabled = state.page >= state.pageCount;
   $("#flatten-ocr").disabled = !state.pdf && !state.image;
-  $("#undo-redaction").disabled = !(state.redactions.get(state.page) || []).length;
 }
 async function readDocumentFile(file) {
-  clearDocument({ keepStatus: true }); state.source = file; state.redactions = new Map(); state.flatDocument = null;
+  clearDocument({ keepStatus: true }); state.source = file; state.redactions = new Map(); state.redoRedactions = new Map(); state.documentZoom = 1; state.flatDocument = null;
   $("#privacy-status").textContent = "Abriendo el archivo en memoria local…";
   try {
     if (file.size > 25 * 1024 * 1024) throw new Error("El documento supera el límite local de 25 MB.");
@@ -731,18 +789,38 @@ async function readDocumentFile(file) {
       state.image = await createImageBitmap(file);
       if (state.image.width * state.image.height > 40000000) throw new Error("La imagen supera el límite local de 40 megapíxeles.");
       state.pageCount = 1; state.page = 1;
-    } else { throw new Error("Para proteger el documento, cargue PDF o imagen. Puede ingresar CSV en la pestaña manual."); }
+    } else {
+      throw new Error("Para proteger el documento, cargue PDF o imagen. También puede ingresar una tabla de consumos en la pestaña manual.");
+    }
+    $("#sanitizer-dialog").showModal();
+    document.body.classList.add("sanitizer-open");
     await renderDocumentPage(); $("#privacy-status").textContent = "Dibuja rectángulos negros sobre cada dato personal. Luego confirma para aplanar y extraer localmente.";
+    $("#reopen-sanitizer").hidden = true;
   } catch (error) { clearDocument({ keepStatus: true }); $("#privacy-status").textContent = error.message; }
 }
-function pointerPosition(event) { const canvas = $("#redaction-canvas"); const r = canvas.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (event.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (event.clientY - r.top) / r.height)) }; }
-function beginRedaction(event) { if (!state.source) return; event.preventDefault(); state.pointerStart = pointerPosition(event); $("#redaction-canvas").setPointerCapture(event.pointerId); }
-function finishRedaction(event) {
-  if (!state.pointerStart) return; const end = pointerPosition(event); const x = Math.min(state.pointerStart.x, end.x); const y = Math.min(state.pointerStart.y, end.y); const w = Math.abs(end.x - state.pointerStart.x); const h = Math.abs(end.y - state.pointerStart.y); state.pointerStart = null;
-  if (w < 0.004 || h < 0.004) return;
-  const rects = state.redactions.get(state.page) || []; rects.push({ x, y, w, h }); state.redactions.set(state.page, rects); renderDocumentPage();
+async function setDocumentZoom(nextZoom, anchor = null) {
+  if (!state.source) return;
+  const stage = $(".redaction-stage"); const wrap = $(".redaction-canvas-wrap");
+  const before = wrap.getBoundingClientRect(); const stageRect = stage.getBoundingClientRect();
+  const point = anchor || state.zoomPointer || { x: stageRect.left + stage.clientWidth / 2, y: stageRect.top + stage.clientHeight / 2 };
+  const relativeX = Math.max(0, Math.min(1, (point.x - before.left + stage.scrollLeft) / before.width));
+  const relativeY = Math.max(0, Math.min(1, (point.y - before.top + stage.scrollTop) / before.height));
+  state.documentZoom = Math.max(.5, Math.min(4, nextZoom));
+  await renderDocumentPage();
+  const after = wrap.getBoundingClientRect();
+  stage.scrollLeft = Math.max(0, relativeX * after.width - (point.x - stageRect.left));
+  stage.scrollTop = Math.max(0, relativeY * after.height - (point.y - stageRect.top));
 }
-function undoRedaction() { const rects = state.redactions.get(state.page) || []; rects.pop(); state.redactions.set(state.page, rects); renderDocumentPage(); }
+function pointerPosition(event) { const canvas = $("#redaction-canvas"); const r = canvas.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (event.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (event.clientY - r.top) / r.height)) }; }
+function beginRedaction(event) { if (!state.source) return; event.preventDefault(); state.pointerStart = pointerPosition(event); state.pointerCurrent = state.pointerStart; $("#redaction-overlay").setPointerCapture(event.pointerId); drawRedactions(); }
+function moveRedaction(event) { if (!state.pointerStart) return; state.pointerCurrent = pointerPosition(event); drawRedactions(); }
+function finishRedaction(event) {
+  if (!state.pointerStart) return; const end = pointerPosition(event); const x = Math.min(state.pointerStart.x, end.x); const y = Math.min(state.pointerStart.y, end.y); const w = Math.abs(end.x - state.pointerStart.x); const h = Math.abs(end.y - state.pointerStart.y); state.pointerStart = null; state.pointerCurrent = null;
+  if (w < 0.004 || h < 0.004) return;
+  const rects = state.redactions.get(state.page) || []; rects.push({ x, y, w, h }); state.redactions.set(state.page, rects); state.redoRedactions.set(state.page, []); drawRedactions();
+}
+function undoRedaction() { const rects = state.redactions.get(state.page) || []; if (!rects.length) return; const redo = state.redoRedactions.get(state.page) || []; redo.push(rects.pop()); state.redoRedactions.set(state.page, redo); state.redactions.set(state.page, rects); drawRedactions(); }
+function redoRedaction() { const redo = state.redoRedactions.get(state.page) || []; if (!redo.length) return; const rects = state.redactions.get(state.page) || []; rects.push(redo.pop()); state.redactions.set(state.page, rects); state.redoRedactions.set(state.page, redo); drawRedactions(); }
 async function flattenAndExtract() {
   if (!state.pdf && !state.image) return;
   const button = $("#flatten-ocr"); button.disabled = true; button.textContent = "Aplanando y extrayendo…";
@@ -755,7 +833,7 @@ async function flattenAndExtract() {
         (state.redactions.get(pageNumber) || []).forEach((r) => { const c = canvas.getContext("2d"); c.fillStyle = "#000"; c.fillRect(r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height); }); canvases.push(canvas);
       }
     } else {
-      const canvas = document.createElement("canvas"); canvas.width = $("#redaction-canvas").width; canvas.height = $("#redaction-canvas").height; canvas.getContext("2d").drawImage($("#redaction-canvas"), 0, 0); canvases.push(canvas);
+      const canvas = document.createElement("canvas"); canvas.width = $("#redaction-canvas").width; canvas.height = $("#redaction-canvas").height; canvas.getContext("2d").drawImage($("#redaction-canvas"), 0, 0); canvas.getContext("2d").drawImage($("#redaction-overlay"), 0, 0); canvases.push(canvas);
     }
     const flattenedPages = await Promise.all(canvases.map((canvas) => new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("No se pudo aplanar la página")), "image/png"))));
     if (!window.Tesseract) throw new Error("Tesseract.js no se cargó. Compruebe la conexión y vuelva a intentar.");
@@ -763,9 +841,11 @@ async function flattenAndExtract() {
     try { for (const page of flattenedPages) text.push((await worker.recognize(page)).data.text); }
     finally { await worker.terminate(); }
     state.pdf?.destroy(); state.pdf = null; state.image?.close?.(); state.image = null; state.source = null; state.flatDocument = null; $("#document-file").value = "";
+    $("#sanitizer-dialog").close();
+    $("#reopen-sanitizer").hidden = true;
     $("#document-preview").innerHTML = `<p>Documento aplanado en memoria; ${canvases.length} página(s) procesada(s). No se guarda ni se transmite.</p><pre>${escapeHtml(text.join("\n"))}</pre>`;
     state.sourceText = text.join("\n"); extractFinancialData(state.sourceText); $("#privacy-status").textContent = "OCR local completado. Corrige y revisa los campos y cada consumo antes de comparar deudas.";
-    $("#redaction-canvas").getContext("2d").clearRect(0, 0, $("#redaction-canvas").width, $("#redaction-canvas").height); $("#redaction-canvas").hidden = true; $(".document-empty").hidden = false; $(".document-empty").textContent = "El archivo y la imagen aplanada se descartaron de la vista. Revisa el texto y los campos detectados en el paso 2."; $("#page-indicator").textContent = "Documento aplanado y descartado";
+    $("#redaction-canvas").getContext("2d").clearRect(0, 0, $("#redaction-canvas").width, $("#redaction-canvas").height); $("#redaction-overlay").getContext("2d").clearRect(0, 0, $("#redaction-overlay").width, $("#redaction-overlay").height); $(".redaction-canvas-wrap").hidden = true; $(".document-empty").hidden = false; $(".document-empty").textContent = "El archivo y la imagen aplanada se descartaron de la vista. Revisa el texto y los campos detectados en el paso 2."; $("#page-indicator").textContent = "Documento aplanado y descartado";
   } catch (error) { $("#privacy-status").textContent = `No se pudo completar el OCR local: ${error.message}`; }
   button.textContent = "Confirmar censura y extraer datos"; button.disabled = !state.source;
 }
@@ -900,9 +980,10 @@ async function compareDebtStrategies() {
   finally { compareButton.disabled = false; }
 }
 function clearDocument(options = {}) {
-  state.source?.close?.(); state.pdf?.destroy?.(); state.source = null; state.pdf = null; state.image?.close?.(); state.image = null; state.redactions = new Map(); state.flatDocument = null; state.sourceText = ""; state.transactions = [];
+  state.source?.close?.(); state.pdf?.destroy?.(); state.source = null; state.pdf = null; state.image?.close?.(); state.image = null; state.redactions = new Map(); state.redoRedactions = new Map(); state.pointerStart = null; state.pointerCurrent = null; state.flatDocument = null; state.sourceText = ""; state.transactions = [];
   state.extractionIssues = []; state.extractionMissing = []; state.rejectedTransactions = 0;
-  $("#document-file").value = ""; $("#document-text").value = ""; $("#document-preview").innerHTML = '<p class="empty-state">Aquí aparecerá la vista aplanada y el texto extraído. El archivo original no se conserva después de procesarlo.</p>'; $("#redaction-canvas").getContext("2d").clearRect(0, 0, $("#redaction-canvas").width, $("#redaction-canvas").height); $("#redaction-canvas").hidden = true; $(".document-empty").hidden = false; $(".document-empty").textContent = "Selecciona un PDF o imagen para ver aquí la página y cubrir la información privada."; $("#page-indicator").textContent = "Sin documento"; $("#prev-page").disabled = true; $("#next-page").disabled = true; $("#flatten-ocr").disabled = true; $("#undo-redaction").disabled = true; $("#consent").checked = false; $("#save-anonymized").disabled = true; renderTransactions();
+  $("#sanitizer-dialog").open && $("#sanitizer-dialog").close(); $("#reopen-sanitizer").hidden = true;
+  $("#document-file").value = ""; $("#document-text").value = ""; $("#document-preview").innerHTML = '<p class="empty-state">Aquí aparecerá la vista aplanada y el texto extraído. El archivo original no se conserva después de procesarlo.</p>'; $("#redaction-canvas").getContext("2d").clearRect(0, 0, $("#redaction-canvas").width, $("#redaction-canvas").height); $("#redaction-overlay").getContext("2d").clearRect(0, 0, $("#redaction-overlay").width, $("#redaction-overlay").height); $(".redaction-canvas-wrap").hidden = true; $(".document-empty").hidden = false; $(".document-empty").textContent = "Selecciona un PDF o imagen para ver aquí la página y cubrir la información privada."; $("#page-indicator").textContent = "Sin documento"; $("#prev-page").disabled = true; $("#next-page").disabled = true; $("#flatten-ocr").disabled = true; $("#undo-redaction").disabled = true; $("#redo-redaction").disabled = true; $("#consent").checked = false; $("#save-anonymized").disabled = true; renderTransactions();
   ["financial-date", "financial-concept", "financial-amount", "financial-payment", "financial-balance", "financial-rate", "financial-minimum"].forEach((id) => { $(`#${id}`).value = ""; });
   updateExtractionReview();
   if (!options.keepStatus) $("#privacy-status").textContent = "Archivo y campos temporales descartados.";
@@ -918,7 +999,36 @@ function confirmDiscardDocument(action) {
   return window.confirm(`${action} Se descartarán el archivo temporal, el texto OCR y los campos sin guardar. Los resúmenes ya guardados se conservarán.`);
 }
 
+function bindNavMenus() {
+  const menus = $$('[data-menu]');
+  const closeMenus = (except = null) => {
+    menus.forEach((menu) => {
+      if (menu === except) return;
+      menu.classList.remove('open');
+      menu.querySelector('[data-menu-trigger]')?.setAttribute('aria-expanded', 'false');
+    });
+  };
+  menus.forEach((menu) => {
+    const trigger = menu.querySelector('[data-menu-trigger]');
+    trigger?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const willOpen = !menu.classList.contains('open');
+      closeMenus(menu);
+      menu.classList.toggle('open', willOpen);
+      trigger.setAttribute('aria-expanded', String(willOpen));
+    });
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest?.('[data-menu]')) closeMenus();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeMenus();
+  });
+  $$('.nav-popover').forEach((popover) => popover.addEventListener('click', (event) => event.stopPropagation()));
+}
+
 function bindEvents() {
+  bindNavMenus();
   bindHelpEvents();
   bindChartEvents();
   $$("[data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
@@ -927,7 +1037,9 @@ function bindEvents() {
   $("#rate").addEventListener("input", () => { if (!state.applyingRate) state.activeRateCode = null; updateCalculator(); });
   $("#extra-mode").addEventListener("change", updateCalculator); $("#rate-type").addEventListener("change", selectRateType); $("#currency").addEventListener("change", changeCurrency);
   $("#export-csv").addEventListener("click", exportSchedule); $("#save-scenario").addEventListener("click", saveScenario); $$(".clear-local-data").forEach((button) => button.addEventListener("click", clearLocalFinancialData));
-  $("#fx-amount").addEventListener("input", updateFxResult); $("#fx-direction").addEventListener("change", updateFxResult); $("#use-fx-rate").addEventListener("click", useFxRate);
+  $("#fx-from-amount").addEventListener("input", updateFxResult);
+  $("#fx-to-amount").addEventListener("input", updateFxFromTarget);
+  $("#fx-swap").addEventListener("click", swapFxCurrencies);
   $$("[data-currency-filter]").forEach((button) => button.addEventListener("click", () => {
     state.rateFilter = button.dataset.currencyFilter;
     $$("[data-currency-filter]").forEach((item) => { const selected = item === button; item.classList.toggle("active", selected); item.setAttribute("aria-pressed", String(selected)); });
@@ -955,8 +1067,26 @@ function bindEvents() {
     const file = event.dataTransfer.files[0];
     if (file && confirmDiscardDocument("Cargar el archivo arrastrado?")) readDocumentFile(file);
   });
-  $("#redaction-canvas").addEventListener("pointerdown", beginRedaction); $("#redaction-canvas").addEventListener("pointerup", finishRedaction);
-  $("#undo-redaction").addEventListener("click", undoRedaction); $("#flatten-ocr").addEventListener("click", flattenAndExtract); $("#prev-page").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; renderDocumentPage(); } }); $("#next-page").addEventListener("click", () => { if (state.page < state.pageCount) { state.page += 1; renderDocumentPage(); } });
+  $("#redaction-overlay").addEventListener("pointerdown", beginRedaction); $("#redaction-overlay").addEventListener("pointermove", moveRedaction); $("#redaction-overlay").addEventListener("pointerup", finishRedaction); $("#redaction-overlay").addEventListener("pointercancel", finishRedaction);
+  $("#undo-redaction").addEventListener("click", undoRedaction); $("#redo-redaction").addEventListener("click", redoRedaction); $("#flatten-ocr").addEventListener("click", flattenAndExtract);
+  $("#close-sanitizer").addEventListener("click", () => { $("#sanitizer-dialog").close(); $("#reopen-sanitizer").hidden = !state.source; });
+  $("#sanitizer-dialog").addEventListener("close", () => { document.body.classList.remove("sanitizer-open"); $("#reopen-sanitizer").hidden = !state.source; });
+  $("#reopen-sanitizer").addEventListener("click", () => { if (state.source) { $("#sanitizer-dialog").showModal(); document.body.classList.add("sanitizer-open"); } });
+  $$(".zoom-step").forEach((button) => button.addEventListener("click", () => setDocumentZoom(state.documentZoom + (button.dataset.zoom === "in" ? .25 : -.25))));
+  const redactionStage = $(".redaction-stage");
+  redactionStage.addEventListener("pointermove", (event) => { state.zoomPointer = { x: event.clientX, y: event.clientY }; });
+  redactionStage.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    if (event.ctrlKey || event.metaKey) setDocumentZoom(state.documentZoom * Math.exp(-event.deltaY * .002), { x: event.clientX, y: event.clientY });
+    else { redactionStage.scrollTop += event.deltaY; redactionStage.scrollLeft += event.deltaX; }
+  }, { passive: false });
+  document.addEventListener("keydown", (event) => {
+    if (!$("#sanitizer-dialog").open || !(event.ctrlKey || event.metaKey) || !["z", "y"].includes(event.key.toLowerCase())) return;
+    event.preventDefault();
+    if (event.key.toLowerCase() === "z" && !event.shiftKey) undoRedaction();
+    else redoRedaction();
+  });
+  $("#prev-page").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; renderDocumentPage(); } }); $("#next-page").addEventListener("click", () => { if (state.page < state.pageCount) { state.page += 1; renderDocumentPage(); } });
   $("#scan-document").addEventListener("click", () => { extractFinancialData($("#document-text").value); $("#document-preview").innerHTML = '<p>Texto sanitizado analizado localmente. El contenido original no se guardó ni se envió al servidor.</p>'; $("#privacy-status").textContent = "Texto analizado localmente. Revise el resumen y las filas extraídas."; });
   $("#clear-document").addEventListener("click", () => { if (confirmDiscardDocument("Descartar el contenido actual?")) clearDocument(); }); $("#save-anonymized").addEventListener("click", saveAnonymizedSummary); $("#consent").addEventListener("change", updateExtractionReview);
   $("#document-type").addEventListener("change", updateExtractionReview);
@@ -964,7 +1094,7 @@ function bindEvents() {
   ["#financial-date", "#financial-amount", "#financial-payment", "#financial-balance", "#financial-rate", "#financial-minimum"].forEach((selector) => $(selector).addEventListener("input", updateExtractionReview));
   $("#debt-budget").addEventListener("input", () => { const result = $("#debt-strategy-result"); result.textContent = "El presupuesto cambió. Vuelve a comparar para actualizar los resultados."; result.classList.remove("error", "warning"); });
   $("#add-transaction").addEventListener("click", addTransaction); $("#import-transactions").addEventListener("click", importTransactions); $("#add-debt").addEventListener("click", addCurrentDebt); $("#add-empty-debt").addEventListener("click", addEmptyDebt); $("#compare-debt-strategies").addEventListener("click", compareDebtStrategies);
-  window.addEventListener("resize", () => requestAnimationFrame(drawChart));
+  window.addEventListener("resize", () => { requestAnimationFrame(drawChart); if ($("#sanitizer-dialog").open && state.source) requestAnimationFrame(renderDocumentPage); });
 }
 
 $("#cutoff-date").value = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Costa_Rica", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());

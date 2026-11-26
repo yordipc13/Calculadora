@@ -1,0 +1,15 @@
+CASO FICTICIO PARA PRUEBA - SIN DATOS PERSONALES
+
+Tipo de documento: Préstamo
+Fecha de estado: 25/11/2026
+Concepto: Préstamo personal ficticio
+Monto original: CRC 1.250.000
+Saldo al corte: CRC 900.000
+Cuota mensual: CRC 45.000
+Tasa anual efectiva: 18,5%
+Pago mínimo: CRC 25.000
+Moneda: CRC
+
+Consumos ficticios:
+2026-11-01 Comercio ficticio 25.000,00 CRC
+2026-11-08 Servicio ficticio 12.500,00 CRC

@@ -26,10 +26,12 @@
 ## Pendiente de completar o verificar
 
 ### Publicación y verificación funcional
+- [x] El Worker público responde en `https://calculadora-finanzas.developpage.workers.dev/api/health` y entrega las cinco tasas de `GET /api/rates`.
 - [ ] Publicar en Cloudflare Pages la versión de `index.html` que ya apunta a `https://calculadora-finanzas.developpage.workers.dev/api`.
-- [ ] Abrir el dominio público de la página y confirmar que carga las tasas, el filtro por moneda, la tendencia, “Usar en calculadora” y los módulos de préstamo/deudas.
-- [ ] Confirmar que el cron automático corre en su siguiente horario programado; hasta ahora se confirmó la ejecución manual.
-- [ ] Revisar el resultado y los logs de Cloudflare tras la primera ejecución automática y definir alertas/reintentos si una consulta falla.
+- [ ] Abrir el dominio público final y confirmar que carga las tasas, el filtro por moneda, la tendencia, “Usar en calculadora” y los módulos de préstamo/deudas.
+- [x] Verificar desde `http://127.0.0.1:5500/` el cálculo local, el filtro por moneda, “Usar en calculadora”, el guardado/restauración local y una vista estrecha sin desborde horizontal detectable.
+- [x] El cron automático ejecutó correctamente en su horario UTC y dejó TBP, TED, compra, venta y TPM con estado `ok` el 2026-11-26.
+- [ ] Revisar los logs de Cloudflare y confirmar retención/alertas/reintentos si una consulta falla.
 
 ### Privacidad y extracción
 - [x] Definir campos mínimos para estados de tarjeta, préstamos y otros documentos; los datos incompletos se etiquetan como resumen parcial y pueden guardarse si incluyen un monto o consumo válido.
@@ -42,11 +44,15 @@
 ### Seguridad, operación y calidad
 - [x] Añadir allowlist CORS, límite de 16 KiB para JSON, proyección de campos numéricos y binding de rate limiting para cálculos.
 - [ ] Configurar `CORS_ALLOWED_ORIGINS` con el dominio público definitivo y desplegar el Worker actualizado.
-- [x] Definir CSP y encabezados de seguridad en `_headers`; verificar CSP, rate limiting y encabezados en el dominio público antes de ampliar el uso.
-- [ ] Confirmar con el BCCR las condiciones de uso, cuotas y límites del token; la consulta ya funcionó, pero falta documentar esos límites operativos.
+- [x] Verificar públicamente que `GET /api/health` responde `ok: true`, `GET /api/rates` devuelve las cinco referencias con estado `ok` y los POST de préstamo/deudas responden 200 con datos ficticios.
+- [x] Definir CSP y encabezados de seguridad en `_headers`.
+- [ ] Verificar CSP, rate limiting y encabezados en el dominio público antes de ampliar el uso.
+- [ ] Confirmar directamente con el BCCR las cuotas, límites, vigencia y condiciones operativas del token. La API pública consultó correctamente las cinco referencias, pero el portal público no expuso una política numérica verificable de cuotas. Canal oficial: Centro de Atención del BCCR, https://atencion.bccr.fi.cr/csm?id=bccr_aic_contactenos, o central telefónica +506 2243-3333.
 - [ ] Completar la verificación operativa: el Worker registra éxitos, duración y errores, y purga logs de más de 30 días; falta confirmar la política en Supabase y configurar alertas externas.
-- [ ] Ejecutar y documentar las pruebas automatizadas existentes; se añadieron pruebas simuladas de integración BCCR y regresión de privacidad, pendientes de ejecución.
-- [ ] Revisar la precisión de las simulaciones y del OCR con casos de ejemplo de distintos bancos y dispositivos.
+- [ ] Ejecutar y documentar las pruebas automatizadas existentes; se añadieron pruebas simuladas de integración BCCR y regresión de privacidad. La ejecución desde el chat requiere que el directorio remoto `vsls:/` esté montado en el terminal local; el terminal actual no puede acceder físicamente a `worker/package.json`.
+- [x] Probar el visor manualmente en `http://127.0.0.1:5500/`: carga de imagen, extracción de campos ficticios, consumos CSV, consentimiento, guardado local, deuda desde resumen, estrategias Avalancha/Bola de nieve y borrado local.
+- [x] Crear `informacion/estado-prueba-ocr.html` y probar OCR de un PDF ficticio de una página: detectó fecha, monto, cuota, saldo, tasa, pago mínimo y dos consumos con los valores esperados.
+- [ ] Revisar la precisión de las simulaciones y del OCR con PDFs/imágenes reales de distintos bancos y dispositivos.
 
 ### Decisiones futuras, fuera del alcance actual
 - [ ] Persistencia de escenarios en servidor: decidir autenticación, permisos y retención antes de guardar datos de usuario fuera del navegador.
