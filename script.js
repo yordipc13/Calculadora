@@ -10,6 +10,7 @@ const LOCAL_FINANCIAL_KEYS = ["financialScenarios", "anonymizedDebtSummaries"];
 const state = {
   schedule: [], rates: [], rateFilter: "ALL", ratesError: null, source: null, pdf: null, image: null,
   page: 1, pageCount: 1, redactions: new Map(), redoRedactions: new Map(), pointerStart: null, documentZoom: 1, flatDocument: null,
+  lastTouchAt: 0, lastTouchTap: null, touchDrawing: false, pinchStartDistance: 0, pinchStartZoom: 1, pinchZoomFrame: false, pinchZoomRatio: 1, pinchZoomAnchor: null,
   transactions: [], debts: [], calculationSequence: 0, activeRateCode: null, applyingRate: false,
   extractionIssues: [], extractionMissing: [], rejectedTransactions: 0,
   chartPoints: [], chartPlot: null, selectedChartPoint: null,
@@ -374,6 +375,7 @@ function switchView(name) {
     menu.classList.remove('open');
     menu.querySelector('[data-menu-trigger]')?.setAttribute('aria-expanded', 'false');
   });
+  setMobileDrawer(false);
   if (name === "calculator") requestAnimationFrame(drawChart);
   if (name === "rates") loadRates();
 }
@@ -794,7 +796,7 @@ async function readDocumentFile(file) {
     }
     $("#sanitizer-dialog").showModal();
     document.body.classList.add("sanitizer-open");
-    await renderDocumentPage(); $("#privacy-status").textContent = "Dibuja rectángulos negros sobre cada dato personal. Luego confirma para aplanar y extraer localmente.";
+    await renderDocumentPage(); showMobileRedactionHint(); $("#privacy-status").textContent = "Dibuja rectángulos negros sobre cada dato personal. Luego confirma para aplanar y extraer localmente.";
     $("#reopen-sanitizer").hidden = true;
   } catch (error) { clearDocument({ keepStatus: true }); $("#privacy-status").textContent = error.message; }
 }
@@ -812,12 +814,29 @@ async function setDocumentZoom(nextZoom, anchor = null) {
   stage.scrollTop = Math.max(0, relativeY * after.height - (point.y - stageRect.top));
 }
 function pointerPosition(event) { const canvas = $("#redaction-canvas"); const r = canvas.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (event.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (event.clientY - r.top) / r.height)) }; }
-function beginRedaction(event) { if (!state.source) return; event.preventDefault(); state.pointerStart = pointerPosition(event); state.pointerCurrent = state.pointerStart; $("#redaction-overlay").setPointerCapture(event.pointerId); drawRedactions(); }
-function moveRedaction(event) { if (!state.pointerStart) return; state.pointerCurrent = pointerPosition(event); drawRedactions(); }
+function startRedactionAt(clientX, clientY, pointerId = null) {
+  if (!state.source) return;
+  state.pointerStart = pointerPosition({ clientX, clientY }); state.pointerCurrent = state.pointerStart;
+  if (pointerId !== null) $("#redaction-overlay").setPointerCapture(pointerId);
+  drawRedactions();
+}
+function beginRedaction(event) {
+  if (event.pointerType === "touch" || Date.now() - state.lastTouchAt < 800 || !state.source) return;
+  event.preventDefault(); startRedactionAt(event.clientX, event.clientY, event.pointerId);
+}
+function moveRedaction(event) { if (event.pointerType === "touch" || !state.pointerStart) return; state.pointerCurrent = pointerPosition(event); drawRedactions(); }
 function finishRedaction(event) {
+  if (event.pointerType === "touch") return;
   if (!state.pointerStart) return; const end = pointerPosition(event); const x = Math.min(state.pointerStart.x, end.x); const y = Math.min(state.pointerStart.y, end.y); const w = Math.abs(end.x - state.pointerStart.x); const h = Math.abs(end.y - state.pointerStart.y); state.pointerStart = null; state.pointerCurrent = null;
   if (w < 0.004 || h < 0.004) return;
   const rects = state.redactions.get(state.page) || []; rects.push({ x, y, w, h }); state.redactions.set(state.page, rects); state.redoRedactions.set(state.page, []); drawRedactions();
+}
+function showMobileRedactionHint() {
+  const hint = $("#mobile-redaction-hint");
+  if (!hint || !window.matchMedia("(max-width: 800px)").matches) return;
+  hint.hidden = false;
+  window.clearTimeout(showMobileRedactionHint.timer);
+  showMobileRedactionHint.timer = window.setTimeout(() => { hint.hidden = true; }, 5000);
 }
 function undoRedaction() { const rects = state.redactions.get(state.page) || []; if (!rects.length) return; const redo = state.redoRedactions.get(state.page) || []; redo.push(rects.pop()); state.redoRedactions.set(state.page, redo); state.redactions.set(state.page, rects); drawRedactions(); }
 function redoRedaction() { const redo = state.redoRedactions.get(state.page) || []; if (!redo.length) return; const rects = state.redactions.get(state.page) || []; rects.push(redo.pop()); state.redactions.set(state.page, rects); state.redoRedactions.set(state.page, redo); drawRedactions(); }
@@ -1022,13 +1041,41 @@ function bindNavMenus() {
     if (!event.target.closest?.('[data-menu]')) closeMenus();
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeMenus();
+    if (event.key === 'Escape') { closeMenus(); setMobileDrawer(false); }
   });
   $$('.nav-popover').forEach((popover) => popover.addEventListener('click', (event) => event.stopPropagation()));
 }
 
+function setMobileDrawer(open) {
+  const drawer = $("#mobile-drawer");
+  const trigger = $("#mobile-menu-trigger");
+  const backdrop = $("#mobile-drawer-backdrop");
+  if (!drawer || !trigger || !backdrop) return;
+  drawer.classList.toggle("open", open);
+  drawer.inert = !open;
+  drawer.setAttribute("aria-hidden", String(!open));
+  document.body.classList.toggle("mobile-nav-open", open);
+  trigger.setAttribute("aria-expanded", String(open));
+  trigger.setAttribute("aria-label", open ? "Cerrar menú" : "Abrir menú");
+  backdrop.hidden = !open;
+  if (open) $("#mobile-drawer-close")?.focus();
+}
+
+function bindMobileDrawer() {
+  $("#mobile-menu-trigger")?.addEventListener("click", () => setMobileDrawer(true));
+  $("#mobile-drawer-close")?.addEventListener("click", () => setMobileDrawer(false));
+  $("#mobile-drawer-backdrop")?.addEventListener("click", () => setMobileDrawer(false));
+  $(".mobile-scenarios-trigger")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setMobileDrawer(false);
+    const trigger = $("#scenarios-menu [data-menu-trigger]");
+    if (!$("#scenarios-menu").classList.contains("open")) trigger?.click();
+  });
+}
+
 function bindEvents() {
   bindNavMenus();
+  bindMobileDrawer();
   bindHelpEvents();
   bindChartEvents();
   $$("[data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
@@ -1070,11 +1117,77 @@ function bindEvents() {
   $("#redaction-overlay").addEventListener("pointerdown", beginRedaction); $("#redaction-overlay").addEventListener("pointermove", moveRedaction); $("#redaction-overlay").addEventListener("pointerup", finishRedaction); $("#redaction-overlay").addEventListener("pointercancel", finishRedaction);
   $("#undo-redaction").addEventListener("click", undoRedaction); $("#redo-redaction").addEventListener("click", redoRedaction); $("#flatten-ocr").addEventListener("click", flattenAndExtract);
   $("#close-sanitizer").addEventListener("click", () => { $("#sanitizer-dialog").close(); $("#reopen-sanitizer").hidden = !state.source; });
-  $("#sanitizer-dialog").addEventListener("close", () => { document.body.classList.remove("sanitizer-open"); $("#reopen-sanitizer").hidden = !state.source; });
-  $("#reopen-sanitizer").addEventListener("click", () => { if (state.source) { $("#sanitizer-dialog").showModal(); document.body.classList.add("sanitizer-open"); } });
+  $("#sanitizer-dialog").addEventListener("close", () => { document.body.classList.remove("sanitizer-open"); $("#mobile-redaction-hint").hidden = true; $("#reopen-sanitizer").hidden = !state.source; });
+  $("#reopen-sanitizer").addEventListener("click", () => { if (state.source) { $("#sanitizer-dialog").showModal(); document.body.classList.add("sanitizer-open"); showMobileRedactionHint(); } });
   $$(".zoom-step").forEach((button) => button.addEventListener("click", () => setDocumentZoom(state.documentZoom + (button.dataset.zoom === "in" ? .25 : -.25))));
   const redactionStage = $(".redaction-stage");
   redactionStage.addEventListener("pointermove", (event) => { state.zoomPointer = { x: event.clientX, y: event.clientY }; });
+  redactionStage.addEventListener("touchstart", (event) => {
+    state.lastTouchAt = Date.now();
+    if (event.touches.length >= 2) {
+      if (event.cancelable) event.preventDefault();
+      const [first, second] = event.touches;
+      state.lastTouchTap = null; state.touchDrawing = false; state.pointerStart = null; state.pointerCurrent = null;
+      drawRedactions();
+      state.pinchStartDistance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      state.pinchStartZoom = state.documentZoom;
+      return;
+    }
+    const touch = event.changedTouches[0];
+    const previous = state.lastTouchTap;
+    const isDoubleTap = previous && Date.now() - previous.time < 500 && Math.hypot(touch.clientX - previous.x, touch.clientY - previous.y) < 32;
+    if (isDoubleTap) {
+      if (event.cancelable) event.preventDefault();
+      state.lastTouchTap = null; state.touchDrawing = true; startRedactionAt(touch.clientX, touch.clientY);
+    } else {
+      state.lastTouchTap = null;
+      state.lastTouchStart = { x: touch.clientX, y: touch.clientY };
+    }
+  }, { passive: false });
+  redactionStage.addEventListener("touchmove", (event) => {
+    state.lastTouchAt = Date.now();
+    if (event.touches.length >= 2 && state.pinchStartDistance > 0) {
+      if (event.cancelable) event.preventDefault();
+      const [first, second] = event.touches;
+      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      state.pinchZoomRatio = distance / state.pinchStartDistance;
+      state.pinchZoomAnchor = { x: (first.clientX + second.clientX) / 2, y: (first.clientY + second.clientY) / 2 };
+      if (!state.pinchZoomFrame) {
+        state.pinchZoomFrame = true;
+        requestAnimationFrame(() => {
+          state.pinchZoomFrame = false;
+          setDocumentZoom(state.pinchStartZoom * state.pinchZoomRatio, state.pinchZoomAnchor);
+        });
+      }
+      return;
+    }
+    const touch = event.changedTouches[0];
+    if (state.touchDrawing && state.pointerStart) {
+      if (event.cancelable) event.preventDefault();
+      state.pointerCurrent = pointerPosition(touch); drawRedactions();
+    } else if (state.lastTouchStart && Math.hypot(touch.clientX - state.lastTouchStart.x, touch.clientY - state.lastTouchStart.y) > 8) {
+      state.lastTouchTap = null;
+    }
+  }, { passive: false });
+  redactionStage.addEventListener("touchend", (event) => {
+    state.lastTouchAt = Date.now();
+    state.pinchStartDistance = 0;
+    if (state.touchDrawing && state.pointerStart) {
+      const touch = event.changedTouches[0];
+      finishRedaction({ pointerType: "touch-manual", clientX: touch.clientX, clientY: touch.clientY });
+      state.touchDrawing = false; state.lastTouchStart = null;
+    } else if (state.lastTouchStart) {
+      const touch = event.changedTouches[0];
+      if (Math.hypot(touch.clientX - state.lastTouchStart.x, touch.clientY - state.lastTouchStart.y) <= 8) {
+        state.lastTouchTap = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+      }
+      state.lastTouchStart = null;
+    }
+  }, { passive: true });
+  redactionStage.addEventListener("touchcancel", () => {
+    state.touchDrawing = false; state.pointerStart = null; state.pointerCurrent = null;
+    state.lastTouchStart = null; state.lastTouchTap = null; state.pinchStartDistance = 0; drawRedactions();
+  }, { passive: true });
   redactionStage.addEventListener("wheel", (event) => {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) setDocumentZoom(state.documentZoom * Math.exp(-event.deltaY * .002), { x: event.clientX, y: event.clientY });

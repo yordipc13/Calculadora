@@ -2,4 +2,5 @@ worker/node_modules/
 worker/.wrangler/
 worker/.dev.vars
 informacion/guia_frontend
-informacion/imagenes/
+informacion/imagenes/*
+!informacion/imagenes/logo-amortiza.svg
